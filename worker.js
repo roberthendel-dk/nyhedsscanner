@@ -1,6 +1,6 @@
 /**
  * Nyhedsvagtens værktøjskasse · Cloudflare Worker
- * Henter ODIN 112-puls, politiets meldinger (Ritzau), Vejdirektoratet
+ * Henter ODIN 112-puls, politiets meldinger (Ritzau), Vejdirektoratet, DSB
  * og lokale medier, filtrerer til Faxe, Sorø, Næstved, Vordingborg og Slagelse
  * og returnerer én samlet JSON-liste med CORS, så webappen kan læse den fra alle enheder.
  *
@@ -11,7 +11,7 @@
  * Ret kilder og byer i CONFIG herunder. Intet andet skal ændres.
  */
 
-const VERSION = '8';
+const VERSION = '9';
 
 const CONFIG = {
   // ODIN RSS pr. beredskab. "areaDefault" = hændelser regnes som lokale, medmindre stationen ligger uden for området.
@@ -30,6 +30,8 @@ const CONFIG = {
     critical: 'https://storage.googleapis.com/trafikkort-data/geojson/critical-announcements.json',
     maxKm: 9, // hændelser tættere end dette på en by i listen regnes som lokale
   },
+  // DSB's side med akutte ændringer (ingen RSS – siden læses)
+  dsb: { url: 'https://www.dsb.dk/trafikinformation/' },
   // Lokale medier (RSS). Tilføj/fjern frit. Status vises i appen, så du kan se om et feed virker.
   // Kun artikler om hændelser (brand, uheld, politi osv.) fra medierne. Sæt til false for at få alle lokale artikler.
   mediaOnlyIncidents: true,
@@ -73,6 +75,9 @@ const PLACES = [
   ['Borre', 'Vordingborg', 54.993, 12.428], ['Møn', 'Vordingborg', 54.970, 12.300], ['Ørslev', 'Vordingborg', 55.042, 11.965],
   ['Jungshoved', 'Vordingborg', 55.085, 12.105], ['Masnedø', 'Vordingborg', 54.990, 11.885], ['Farøbroerne', 'Vordingborg', 54.948, 11.990],
   ['Dronning Alexandrines Bro', 'Vordingborg', 54.994, 12.200],
+  // Togstrækninger og stationer
+  ['Lille Syd', 'Faxe', 55.324, 11.966], ['Tureby', 'Faxe', 55.360, 12.020], ['Sydbanen', 'Næstved', 55.229, 11.761],
+  ['Vestbanen', 'Sorø', 55.432, 11.556], ['Næstved St', 'Næstved', 55.229, 11.761],
   // Nabobyer uden for området (bruges kun til at sortere fra)
   ['Ringsted', null, 55.442, 11.790], ['Køge', null, 55.457, 12.182], ['Holbæk', null, 55.717, 11.713],
   ['Kalundborg', null, 55.681, 11.089], ['Nykøbing F', null, 54.766, 11.873], ['Stevns', null, 55.330, 12.380],
@@ -330,6 +335,56 @@ function better(a, b) { // er a bedre end b?
   return (a.time || '') > (b.time || '') || ((a.time || '') === (b.time || '') && (a.text || '').length > (b.text || '').length);
 }
 
+const DA_MONTHS = { jan: 1, feb: 2, mar: 3, apr: 4, maj: 5, jun: 6, jul: 7, aug: 8, sep: 9, okt: 10, nov: 11, dec: 12 };
+/** "i dag kl. 11:29", "i går kl. 9.05", "11. sept. 13:34", "22. november 2026 kl. 08:10" → ISO */
+function parseDaDate(s) {
+  if (!s) return null;
+  const now = new Date(Date.now() + 36e5); // grov dansk dato
+  let y = now.getUTCFullYear(), mo = now.getUTCMonth() + 1, d = now.getUTCDate();
+  const tm = s.match(/(\d{1,2})[:.](\d{2})(?!\d)/);
+  if (/i går/i.test(s)) { const g = new Date(now - 864e5); y = g.getUTCFullYear(); mo = g.getUTCMonth() + 1; d = g.getUTCDate(); }
+  else {
+    const dm = s.match(/(\d{1,2})\.\s*([a-zæøå]{3})[a-zæøå]*\.?(?:\s*(\d{4}))?/i);
+    if (dm && DA_MONTHS[dm[2].toLowerCase()]) { d = +dm[1]; mo = DA_MONTHS[dm[2].toLowerCase()]; if (dm[3]) y = +dm[3]; else if (mo > now.getUTCMonth() + 2) y -= 1; }
+    else if (!/i dag/i.test(s) && !tm) return null;
+  }
+  return danishLocalToIso(y, mo, d, tm ? +tm[1] : 0, tm ? +tm[2] : 0, 0);
+}
+
+/** DSB: akutte ændringer læses fra trafikinformationssiden. */
+async function srcDsb(ctx) {
+  const items = [], errors = [];
+  try {
+    const html = await fetchText(CONFIG.dsb.url, ctx);
+    const a = html.search(/Akutte ændringer/i);
+    const b = html.search(/Planlagte ændringer/i);
+    const sec = a >= 0 ? html.slice(a, b > a ? b : a + 40000) : html;
+    if (/Ingen akutte ændringer/i.test(stripHtml(sec).slice(0, 400))) return { items, errors };
+    const seen = new Set();
+    for (const m of sec.matchAll(/<a\b[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi)) {
+      const parts = m[2].split(/<\/(?:h\d|p|div|span|time|strong)>|<br\s*\/?>/i).map(stripHtml).filter(Boolean);
+      const text = parts.join(' · ').replace(/\s+/g, ' ').trim();
+      if (text.length < 15 || /^(læs mere|se alle|se mere)/i.test(text)) continue;
+      const href = m[1].startsWith('http') ? m[1] : 'https://www.dsb.dk' + (m[1].startsWith('/') ? '' : '/') + m[1];
+      if (seen.has(href + text)) continue; seen.add(href + text);
+      const before = stripHtml(sec.slice(Math.max(0, m.index - 500), m.index));
+      const upd = (text.match(/(?:opdateret|seneste opdatering)[^·]*/i) || before.match(/(?:opdateret|seneste opdatering)[^.]*?(?:kl\.\s*)?\d{1,2}[:.]\d{2}/gi)?.slice(-1) || [])[0];
+      const title = parts.filter(x => !/^(opdateret|seneste opdatering)/i.test(x)).sort((x, y) => y.length - x.length)[0] || text;
+      const route = parts.find(x => / - | – /.test(x) && x.length < 80) || '';
+      const pm = matchPlace(route + ' ' + text);
+      items.push({
+        id: 'dsb-' + hash(href + title), source: 'dsb', sourceLabel: 'DSB',
+        time: parseDaDate(upd || ''), title: title.slice(0, 160),
+        text: [route && route !== title ? 'Strækning: ' + route : '', upd || ''].filter(Boolean).join(' · '),
+        url: href, place: pm ? pm.place : route, kommune: pm ? pm.kommune : null,
+        lat: pm && pm.lat, lon: pm && pm.lon, inArea: pm ? pm.inArea : false, category: 'tog',
+      });
+    }
+    if (!items.length) errors.push('Fandt ingen ændringer i siden – DSB har måske ændret opbygning');
+  } catch (e) { errors.push(e.message); }
+  return { items, errors };
+}
+
 // ───────────────────────── handler ─────────────────────────
 
 const CORS = {
@@ -343,6 +398,7 @@ async function buildFeed(ctx) {
     ['odin', 'ODIN 112-puls', () => srcOdin(ctx)],
     ['politi', 'Politiet', () => srcRss(CONFIG.politi, 'politi', f => 'Politi · ' + f.label.replace(' Politi', ''), 'politi', ctx)],
     ['vd', 'Vejdirektoratet', () => srcVd(ctx)],
+    ['dsb', 'DSB', () => srcDsb(ctx)],
     ['medier', 'Lokale medier', () => srcRss(CONFIG.media, 'medier', f => f.label, 'medier', ctx)],
   ];
   const results = await Promise.all(defs.map(async ([key, label, fn]) => {
@@ -396,4 +452,4 @@ export default {
 };
 
 // Eksporter til test i Node (ignoreres af Cloudflare)
-export const _test = { parseRss, parseDate, matchPlace, nearestPlace, stripHtml, srcOdin, srcVd, srcRss, buildFeed, CONFIG };
+export const _test = { parseRss, parseDate, matchPlace, nearestPlace, stripHtml, srcOdin, srcVd, srcDsb, parseDaDate, srcRss, buildFeed, CONFIG };

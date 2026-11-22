@@ -11,6 +11,8 @@
  * Ret kilder og byer i CONFIG herunder. Intet andet skal ændres.
  */
 
+const VERSION = '4';
+
 const CONFIG = {
   // ODIN RSS pr. beredskab. "areaDefault" = hændelser regnes som lokale, medmindre stationen ligger uden for området.
   odin: [
@@ -399,6 +401,7 @@ async function buildFeed(ctx) {
   for (const r of results) { r.items = r.items.filter(i => byId.get(dupKey(i)) === i); }
   return {
     updated: new Date().toISOString(),
+    version: VERSION,
     area: KOMMUNER,
     items,
     sources: results.map(r => ({
@@ -420,7 +423,7 @@ export default {
         headers: { ...CORS, 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'max-age=20' },
       });
     }
-    return new Response('Nyhedsvagtens værktøjskasse: worker kører. Data: /api/feed', { headers: { ...CORS, 'Content-Type': 'text/plain; charset=utf-8' } });
+    return new Response('Nyhedsvagtens værktøjskasse: worker kører (version ' + VERSION + '). Data: /api/feed', { headers: { ...CORS, 'Content-Type': 'text/plain; charset=utf-8' } });
   },
 };
 

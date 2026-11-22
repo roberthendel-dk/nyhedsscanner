@@ -11,7 +11,7 @@
  * Ret kilder og byer i CONFIG herunder. Intet andet skal ændres.
  */
 
-const VERSION = '4';
+const VERSION = '5';
 
 const CONFIG = {
   // ODIN RSS pr. beredskab. "areaDefault" = hændelser regnes som lokale, medmindre stationen ligger uden for området.
@@ -33,8 +33,10 @@ const CONFIG = {
   // DR P4 Trafik har intet officielt feed. Siden læses "best effort".
   dr: { url: 'https://www.dr.dk/trafik' },
   // Lokale medier (RSS). Tilføj/fjern frit. Status vises i appen, så du kan se om et feed virker.
+  // Kun artikler om hændelser (brand, uheld, politi osv.) fra medierne. Sæt til false for at få alle lokale artikler.
+  mediaOnlyIncidents: true,
   media: [
-    { url: 'https://www.tv2east.dk/rss', label: 'TV ØST' },
+    { url: 'https://www.tv2east.dk/rss', label: 'TV2 Øst' },
     // { url: 'https://www.sn.dk/rss/...', label: 'sn.dk' },  // indsæt sn.dk's RSS-adresse, hvis I har den
   ],
   cacheSeconds: 60,
@@ -82,6 +84,12 @@ const PLACES = [
 PLACES.forEach(p => { if (p[1] === 'Ringsted') p[1] = null; });
 
 const KOMMUNER = ['Faxe', 'Sorø', 'Næstved', 'Vordingborg', 'Slagelse'];
+
+// Ord der tyder på en hændelse (bruges til at sortere medieartikler)
+const INCIDENT_RX = /(?<![\p{L}])(brand|brande|brændt|brændte|ildspåsættelse|røgudvikling|eksplosion|ulykke|færdselsuheld|uheld|påkørt|påkørsel|kollision|frontalt|væltet|kørt galt|politiet|politi(?![\p{L}])|anholdt|anholdelse|sigtet|varetægtsfængslet|efterlyser|efterlysning|savnet|eftersøgning|indbrud|tyveri|røveri|vold|overfald|knivstik|skud|skyderi|dræbt|dødsulykke|omkom|omkommet|livløs|druknet|redningsaktion|reddet|ambulance|brandvæsen|beredskab|112|spærret|evakueret|gasudslip|bombetrussel|kvæstet|tilskadekomne|kom til skade)(?![\p{L}])/iu;
+// Sektioner i medie-URL'er → kommune (null = kendt sektion uden for området)
+const URL_SECTIONS = { faxe: 'Faxe', soroe: 'Sorø', soro: 'Sorø', naestved: 'Næstved', vordingborg: 'Vordingborg', slagelse: 'Slagelse',
+  ringsted: null, koege: null, stevns: null, holbaek: null, kalundborg: null, odsherred: null, lolland: null, guldborgsund: null, roskilde: null, lejre: null, greve: null, solroed: null };
 
 // ───────────────────────── helpers ─────────────────────────
 
@@ -246,7 +254,14 @@ async function srcRss(list, source, sourceLabelFn, category, ctx) {
       const xml = await fetchText(f.url, ctx);
       for (const it of parseRss(xml)) {
         const full = it.title + '\n' + it.description;
-        const pm = matchPlace(full);
+        if (source === 'medier' && CONFIG.mediaOnlyIncidents && !INCIDENT_RX.test(it.title + ' ' + it.description.slice(0, 250))) continue;
+        let pm = matchPlace(full);
+        const sec = ((it.link || '').match(/^https?:\/\/[^/]+\/([a-z-]+)\//i) || [])[1];
+        if (sec && Object.prototype.hasOwnProperty.call(URL_SECTIONS, sec)) {
+          const k = URL_SECTIONS[sec];
+          if (k) { if (!pm || pm.kommune !== k) pm = { place: pm && pm.kommune === k ? pm.place : k, kommune: k, inArea: true }; }
+          else if (!pm || !pm.inArea) pm = { place: pm ? pm.place : '', kommune: null, inArea: false };
+        }
         items.push({
           id: source + '-' + hash(((it.link || it.guid || it.title) + '').split('#')[0]),
           source, sourceLabel: sourceLabelFn(f),
@@ -415,6 +430,27 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     if (request.method === 'OPTIONS') return new Response(null, { headers: CORS });
+    if (url.pathname === '/api/debug-dr') {
+      const urls = ['https://api.dr.dk/trafik/subscribe', 'https://www.dr.dk/drn-traffic/map/', 'https://api.dr.dk/trafik/messages', 'https://api.dr.dk/trafik/api/messages'];
+      const out = [];
+      for (const u of urls) {
+        const t0 = Date.now();
+        try {
+          const res = await fetch(u, { headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json, text/event-stream, */*' }, signal: AbortSignal.timeout(9000) });
+          let text = '';
+          const reader = res.body.getReader(); const dec = new TextDecoder();
+          const stop = Date.now() + 5000;
+          while (text.length < 3000 && Date.now() < stop) {
+            const r = await Promise.race([reader.read(), new Promise(ok => setTimeout(() => ok({ timeout: true }), Math.max(1, stop - Date.now())))]);
+            if (r.timeout || r.done) break;
+            text += dec.decode(r.value, { stream: true });
+          }
+          try { reader.cancel(); } catch (_) {}
+          out.push({ url: u, status: res.status, type: res.headers.get('content-type'), ms: Date.now() - t0, start: text.slice(0, 3000) });
+        } catch (e) { out.push({ url: u, error: String(e && e.message || e), ms: Date.now() - t0 }); }
+      }
+      return new Response(JSON.stringify(out, null, 1), { headers: { ...CORS, 'Content-Type': 'application/json; charset=utf-8' } });
+    }
     if (url.pathname === '/api/feed') {
       let body;
       try { body = await buildFeed(ctx); }

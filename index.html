@@ -229,6 +229,13 @@ function isMsbr(i) {
   return /Midt- og Sydsjællands/i.test(i.text || '') || ['Faxe', 'Næstved', 'Vordingborg'].includes(i.kommune) || /ringsted/i.test(i.place || '');
 }
 
+const SBR_URL = 'https://www.beredskabsinfo.dk/112-puls/?search%5Bbrigade%5D%5Bid%5D=4&search%5Bbrigade%5D%5Btext%5D=&search%5Bstation%5D%5Bid%5D=&search%5Bstation%5D%5Btext%5D=&search%5Bmessage%5D%5Bid%5D=&search%5Bmessage%5D%5Btext%5D=&search%5Bfrom+date%5D%5Byear%5D=&search%5Bfrom+date%5D%5Bmonth%5D=&search%5Bfrom+date%5D%5Bday%5D=&search%5Bto+date%5D%5Byear%5D=&search%5Bto+date%5D%5Bmonth%5D=&search%5Bto+date%5D%5Bday%5D=';
+// Slagelse Brand & Redning, men ikke stationer i Sorø Kommune
+function isSlagelseBR(i) {
+  if (i.source !== 'odin' || i.kommune === 'Sorø') return false;
+  return i.kommune === 'Slagelse' || /Slagelse Brand/i.test(i.text || '');
+}
+
 function render() {
   const list = visible();
   if (!list.length) {
@@ -259,6 +266,7 @@ function render() {
           <button type="button" data-act="copy">Kopiér notits</button>
           ${i.url ? `<a href="${escH(i.url)}" target="_blank" rel="noopener">Kilde</a>` : ''}
           ${isMsbr(i) ? `<a href="${MSBR_URL}" target="_blank" rel="noopener">MSBR døgnrapport</a>` : ''}
+          ${isSlagelseBR(i) ? `<a href="${SBR_URL}" target="_blank" rel="noopener">Slagelse B&amp;R på Beredskabsinfo</a>` : ''}
         </div>
       </div>
     </article>`;

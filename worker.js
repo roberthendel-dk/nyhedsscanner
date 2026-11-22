@@ -1,6 +1,6 @@
 /**
  * Nyhedsvagtens værktøjskasse · Cloudflare Worker
- * Henter ODIN 112-puls, politiets meldinger (Ritzau), Vejdirektoratet, DSB
+ * Henter ODIN 112-puls, politiets meldinger (Ritzau), Vejdirektoratet, DSB, Lokaltog (Østbanen)
  * og lokale medier, filtrerer til Faxe, Sorø, Næstved, Vordingborg og Slagelse
  * og returnerer én samlet JSON-liste med CORS, så webappen kan læse den fra alle enheder.
  *
@@ -11,7 +11,7 @@
  * Ret kilder og byer i CONFIG herunder. Intet andet skal ændres.
  */
 
-const VERSION = '9';
+const VERSION = '10';
 
 const CONFIG = {
   // ODIN RSS pr. beredskab. "areaDefault" = hændelser regnes som lokale, medmindre stationen ligger uden for området.
@@ -32,6 +32,15 @@ const CONFIG = {
   },
   // DSB's side med akutte ændringer (ingen RSS – siden læses)
   dsb: { url: 'https://www.dsb.dk/trafikinformation/' },
+  // Lokaltog (Østbanen Køge–Faxe Ladeplads): meddelelser via Ritzau + planlagte ændringer på lokaltog.dk
+  lokaltog: {
+    rss: [
+      'https://via.ritzau.dk/rss/short-messages/latest?publisherId=13563063',
+      'https://via.ritzau.dk/rss/releases/latest?publisherId=13563063',
+    ],
+    planned: 'https://www.lokaltog.dk/trafikinformation/planlagte-aendringer/',
+    plannedDaysAhead: 3,
+  },
   // Lokale medier (RSS). Tilføj/fjern frit. Status vises i appen, så du kan se om et feed virker.
   // Kun artikler om hændelser (brand, uheld, politi osv.) fra medierne. Sæt til false for at få alle lokale artikler.
   mediaOnlyIncidents: true,
@@ -77,7 +86,7 @@ const PLACES = [
   ['Dronning Alexandrines Bro', 'Vordingborg', 54.994, 12.200],
   // Togstrækninger og stationer
   ['Lille Syd', 'Faxe', 55.324, 11.966], ['Tureby', 'Faxe', 55.360, 12.020], ['Sydbanen', 'Næstved', 55.229, 11.761],
-  ['Vestbanen', 'Sorø', 55.432, 11.556], ['Næstved St', 'Næstved', 55.229, 11.761],
+  ['Vestbanen', 'Sorø', 55.432, 11.556], ['Østbanen', 'Faxe', 55.255, 12.119], ['Faxe Syd', 'Faxe', 55.245, 12.130], ['110R', 'Faxe', 55.255, 12.119], ['Næstved St', 'Næstved', 55.229, 11.761],
   // Nabobyer uden for området (bruges kun til at sortere fra)
   ['Ringsted', null, 55.442, 11.790], ['Køge', null, 55.457, 12.182], ['Holbæk', null, 55.717, 11.713],
   ['Kalundborg', null, 55.681, 11.089], ['Nykøbing F', null, 54.766, 11.873], ['Stevns', null, 55.330, 12.380],
@@ -385,6 +394,54 @@ async function srcDsb(ctx) {
   return { items, errors };
 }
 
+const TRAIN_DISRUPT_RX = /(togbus|aflys|indstill|forsink|nedbrud|signalfejl|sporarbejde|ingen tog|kører ikke|færre tog|ændret køreplan|driftsforstyrr)/i;
+
+/** Lokaltog: driftsmeddelelser/pressemeddelelser (Ritzau) og planlagte ændringer på Østbanen. */
+async function srcLokaltog(ctx) {
+  const items = [], errors = [];
+  const cfg = CONFIG.lokaltog;
+  await Promise.all(cfg.rss.map(async u => {
+    try {
+      for (const it of parseRss(await fetchText(u, ctx))) {
+        const full = it.title + ' ' + it.description;
+        const pm = matchPlace(full);
+        const local = !!(pm && pm.inArea) || /østbanen/i.test(full);
+        if (!local && !TRAIN_DISRUPT_RX.test(full)) continue; // fx udbud, festival-nyheder
+        items.push({
+          id: 'lokaltog-' + hash(((it.link || it.guid || it.title) + '').split('#')[0]), source: 'lokaltog', sourceLabel: 'Lokaltog',
+          time: parseDate(it.pubDate), title: it.title, text: it.description.slice(0, 1200), url: it.link,
+          place: pm ? pm.place : (local ? 'Østbanen' : ''), kommune: pm && pm.inArea ? pm.kommune : (local ? 'Faxe' : null),
+          lat: pm && pm.lat, lon: pm && pm.lon, inArea: local, category: 'tog',
+        });
+      }
+    } catch (e) { errors.push('Meddelelser: ' + e.message); }
+  }));
+  try {
+    const html = await fetchText(cfg.planned, ctx);
+    const now = Date.now(), horizon = now + cfg.plannedDaysAhead * 864e5;
+    const seen = new Set();
+    for (const m of html.matchAll(/<a\b[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi)) {
+      const text = stripHtml(m[2]).replace(/\s+/g, ' ').trim();
+      if (!/østbanen/i.test(text) || text.length < 15) continue;
+      const dates = [...text.matchAll(/(\d{1,2})\.\s*([a-zæøå]+)\.?\s*(\d{4})/gi)]
+        .map(d => DA_MONTHS[d[2].slice(0, 3).toLowerCase()] ? danishLocalToIso(+d[3], DA_MONTHS[d[2].slice(0, 3).toLowerCase()], +d[1], 0, 0, 0) : null).filter(Boolean);
+      const start = dates[0] ? Date.parse(dates[0]) : null;
+      const end = dates[1] ? Date.parse(dates[1]) + 864e5 : (start ? start + 864e5 : null);
+      if (start && (start > horizon || end < now)) continue; // kun igangværende eller snart kommende
+      const href = m[1].startsWith('http') ? m[1] : 'https://www.lokaltog.dk' + (m[1].startsWith('/') ? '' : '/') + m[1];
+      if (seen.has(href)) continue; seen.add(href);
+      const faxeLine = /110R|faxe/i.test(text);
+      items.push({
+        id: 'lokaltog-' + hash(href + text), source: 'lokaltog', sourceLabel: 'Lokaltog · planlagt',
+        time: dates[0] || null, until: dates[1] ? new Date(end).toISOString() : null,
+        title: text.replace(/^[\d/R ]+Østbanen\s*/i, 'Østbanen: ').slice(0, 160), text,
+        url: href, place: 'Østbanen', kommune: faxeLine ? 'Faxe' : null, inArea: faxeLine, category: 'tog',
+      });
+    }
+  } catch (e) { errors.push('Planlagte ændringer: ' + e.message); }
+  return { items, errors };
+}
+
 // ───────────────────────── handler ─────────────────────────
 
 const CORS = {
@@ -399,6 +456,7 @@ async function buildFeed(ctx) {
     ['politi', 'Politiet', () => srcRss(CONFIG.politi, 'politi', f => 'Politi · ' + f.label.replace(' Politi', ''), 'politi', ctx)],
     ['vd', 'Vejdirektoratet', () => srcVd(ctx)],
     ['dsb', 'DSB', () => srcDsb(ctx)],
+    ['lokaltog', 'Lokaltog', () => srcLokaltog(ctx)],
     ['medier', 'Lokale medier', () => srcRss(CONFIG.media, 'medier', f => f.label, 'medier', ctx)],
   ];
   const results = await Promise.all(defs.map(async ([key, label, fn]) => {
@@ -452,4 +510,4 @@ export default {
 };
 
 // Eksporter til test i Node (ignoreres af Cloudflare)
-export const _test = { parseRss, parseDate, matchPlace, nearestPlace, stripHtml, srcOdin, srcVd, srcDsb, parseDaDate, srcRss, buildFeed, CONFIG };
+export const _test = { parseRss, parseDate, matchPlace, nearestPlace, stripHtml, srcOdin, srcVd, srcDsb, srcLokaltog, parseDaDate, srcRss, buildFeed, CONFIG };

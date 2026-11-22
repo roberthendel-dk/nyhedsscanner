@@ -230,6 +230,8 @@ function isMsbr(i) {
 }
 
 const SBR_URL = 'https://www.beredskabsinfo.dk/112-puls/?search%5Bbrigade%5D%5Bid%5D=4&search%5Bbrigade%5D%5Btext%5D=&search%5Bstation%5D%5Bid%5D=&search%5Bstation%5D%5Btext%5D=&search%5Bmessage%5D%5Bid%5D=&search%5Bmessage%5D%5Btext%5D=&search%5Bfrom+date%5D%5Byear%5D=&search%5Bfrom+date%5D%5Bmonth%5D=&search%5Bfrom+date%5D%5Bday%5D=&search%5Bto+date%5D%5Byear%5D=&search%5Bto+date%5D%5Bmonth%5D=&search%5Bto+date%5D%5Bday%5D=';
+const SBR_SORO_URL = SBR_URL.replace('search%5Bbrigade%5D%5Bid%5D=4&', 'search%5Bbrigade%5D%5Bid%5D=33&');
+function isSoroBR(i) { return i.source === 'odin' && i.kommune === 'Sorø'; }
 // Slagelse Brand & Redning, men ikke stationer i Sorø Kommune
 function isSlagelseBR(i) {
   if (i.source !== 'odin' || i.kommune === 'Sorø') return false;
@@ -267,6 +269,7 @@ function render() {
           ${i.url ? `<a href="${escH(i.url)}" target="_blank" rel="noopener">Kilde</a>` : ''}
           ${isMsbr(i) ? `<a href="${MSBR_URL}" target="_blank" rel="noopener">MSBR døgnrapport</a>` : ''}
           ${isSlagelseBR(i) ? `<a href="${SBR_URL}" target="_blank" rel="noopener">Slagelse B&amp;R på Beredskabsinfo</a>` : ''}
+          ${isSoroBR(i) ? `<a href="${SBR_SORO_URL}" target="_blank" rel="noopener">Slagelse B&amp;R (Sorø) på Beredskabsinfo</a>` : ''}
         </div>
       </div>
     </article>`;

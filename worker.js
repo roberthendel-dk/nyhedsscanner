@@ -1,6 +1,6 @@
 /**
  * Nyhedsvagtens værktøjskasse · Cloudflare Worker
- * Henter ODIN 112-puls, politiets meldinger (Ritzau), Vejdirektoratet, DSB, Lokaltog (Østbanen)
+ * Henter ODIN 112-puls, politiets meldinger (Ritzau), Vejdirektoratet, DSB, Lokaltog (Østbanen), DMI-varsler
  * og lokale medier, filtrerer til Faxe, Sorø, Næstved, Vordingborg og Slagelse
  * og returnerer én samlet JSON-liste med CORS, så webappen kan læse den fra alle enheder.
  *
@@ -11,7 +11,7 @@
  * Ret kilder og byer i CONFIG herunder. Intet andet skal ændres.
  */
 
-const VERSION = '10';
+const VERSION = '11';
 
 const CONFIG = {
   // ODIN RSS pr. beredskab. "areaDefault" = hændelser regnes som lokale, medmindre stationen ligger uden for området.
@@ -40,6 +40,12 @@ const CONFIG = {
     ],
     planned: 'https://www.lokaltog.dk/trafikinformation/planlagte-aendringer/',
     plannedDaysAhead: 3,
+  },
+  // DMI's officielle vejrvarsler (CAP via MeteoAlarm)
+  dmi: {
+    url: 'https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-atom-denmark',
+    // Varselsområder der dækker jeres kommuner
+    areaRx: /(vestsjælland|sydsjælland|midtsjælland|sjælland(?!s odde)|zealand|møn|storebælt|great belt|smålandsfarvandet|faxe|næstved|slagelse|sorø|vordingborg|hele landet|danmark|denmark)/i,
   },
   // Lokale medier (RSS). Tilføj/fjern frit. Status vises i appen, så du kan se om et feed virker.
   // Kun artikler om hændelser (brand, uheld, politi osv.) fra medierne. Sæt til false for at få alle lokale artikler.
@@ -442,6 +448,47 @@ async function srcLokaltog(ctx) {
   return { items, errors };
 }
 
+const DMI_EVENTS = [
+  [/thunder|torden/i, 'Torden'], [/rain|regn|skybrud/i, 'Kraftig regn'], [/snow|ice|sne|is(?![\p{L}])|glat/iu, 'Sne og is'],
+  [/wind|vind|storm/i, 'Vind/storm'], [/fog|tåge/i, 'Tåge'], [/coastal|flood|vandstand|stormflod|oversvøm/i, 'Høj vandstand/stormflod'],
+  [/high.?temp|heat|hede|varme/i, 'Hedebølge'], [/low.?temp|cold|frost|kulde/i, 'Kulde'], [/forest|fire|brand/i, 'Brandfare'],
+];
+const DMI_LEVEL = { minor: 'Mindre', moderate: 'Moderat', severe: 'Kraftigt', extreme: 'Ekstremt' };
+
+/** DMI: officielle vejrvarsler (CAP/Atom via MeteoAlarm). */
+async function srcDmi(ctx) {
+  const items = [], errors = [];
+  try {
+    const xml = await fetchText(CONFIG.dmi.url, ctx);
+    const entries = xml.match(/<entry[\s>][\s\S]*?<\/entry>/gi) || [];
+    for (const b of entries) {
+      const area = stripHtml(tag(b, 'cap:areaDesc'));
+      const event = stripHtml(tag(b, 'cap:event')) || stripHtml(tag(b, 'title'));
+      const sev = (tag(b, 'cap:severity') || '').toLowerCase();
+      const issued = parseDate(tag(b, 'cap:effective') || tag(b, 'cap:sent') || tag(b, 'updated') || tag(b, 'published'));
+      const onset = parseDate(tag(b, 'cap:onset')) || issued;
+      const fmt = d => new Date(d).toLocaleString('da-DK', { timeZone: 'Europe/Copenhagen', weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+      const expires = parseDate(tag(b, 'cap:expires'));
+      const msgType = tag(b, 'cap:message_type') || tag(b, 'cap:msgType');
+      if (/cancel/i.test(msgType)) continue;
+      const kind = (DMI_EVENTS.find(([rx]) => rx.test(event)) || [null, event])[1];
+      const level = DMI_LEVEL[sev] || '';
+      const local = CONFIG.dmi.areaRx.test(area) && !/^(nordsjælland|north zealand|københavn|copenhagen|bornholm)$/i.test(area.trim());
+      const pm = matchPlace(area);
+      let link = (b.match(/<link[^>]*href="([^"]+)"/i) || [])[1] || '';
+      items.push({
+        id: 'dmi-' + hash(kind + area + (onset || '')), source: 'dmi', sourceLabel: 'DMI-varsel',
+        time: issued || onset, until: expires,
+        title: (level ? level + ' varsel: ' : 'Varsel: ') + kind.toLowerCase(),
+        text: [area && 'Område: ' + area, (onset || expires) && 'Gælder ' + (onset ? 'fra ' + fmt(onset) + ' ' : '') + (expires ? 'til ' + fmt(expires) : ''), event !== kind ? '(' + event + ')' : ''].filter(Boolean).join(' · '),
+        url: 'https://www.dmi.dk/varsler/', place: area, kommune: pm && pm.inArea ? pm.kommune : null,
+        lat: null, lon: null, inArea: local, category: 'vejr',
+      });
+    }
+  } catch (e) { errors.push(e.message); }
+  return { items, errors };
+}
+
 // ───────────────────────── handler ─────────────────────────
 
 const CORS = {
@@ -457,6 +504,7 @@ async function buildFeed(ctx) {
     ['vd', 'Vejdirektoratet', () => srcVd(ctx)],
     ['dsb', 'DSB', () => srcDsb(ctx)],
     ['lokaltog', 'Lokaltog', () => srcLokaltog(ctx)],
+    ['dmi', 'DMI', () => srcDmi(ctx)],
     ['medier', 'Lokale medier', () => srcRss(CONFIG.media, 'medier', f => f.label, 'medier', ctx)],
   ];
   const results = await Promise.all(defs.map(async ([key, label, fn]) => {
@@ -510,4 +558,4 @@ export default {
 };
 
 // Eksporter til test i Node (ignoreres af Cloudflare)
-export const _test = { parseRss, parseDate, matchPlace, nearestPlace, stripHtml, srcOdin, srcVd, srcDsb, srcLokaltog, parseDaDate, srcRss, buildFeed, CONFIG };
+export const _test = { parseRss, parseDate, matchPlace, nearestPlace, stripHtml, srcOdin, srcVd, srcDsb, srcLokaltog, srcDmi, parseDaDate, srcRss, buildFeed, CONFIG };

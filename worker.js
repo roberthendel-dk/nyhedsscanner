@@ -11,7 +11,7 @@
  * Ret kilder og byer i CONFIG herunder. Intet andet skal ændres.
  */
 
-const VERSION = '5';
+const VERSION = '6';
 
 const CONFIG = {
   // ODIN RSS pr. beredskab. "areaDefault" = hændelser regnes som lokale, medmindre stationen ligger uden for området.
@@ -347,17 +347,30 @@ async function srcDr(ctx) {
       keys.forEach(k => walk(o[k], depth + 1));
     };
     for (const b of blobs) { try { walk(JSON.parse(b), 0); } catch (_) { /* ikke JSON */ } }
+    // Meldinger som links i siden: /trafik/<24 tegns id>
+    for (const m of html.matchAll(/<a[^>]+href="((?:https:\/\/www\.dr\.dk)?\/trafik\/([0-9a-f]{24}))"[^>]*>([\s\S]*?)<\/a>/gi)) {
+      const inner = m[3];
+      const parts = inner.split(/<\/(?:h\d|p|div|span|time)>/i).map(stripHtml).filter(Boolean);
+      const text = parts.join(' · ').replace(/\s+/g, ' ').trim();
+      if (text.length < 10) continue;
+      const dt = (inner.match(/datetime="([^"]+)"/i) || [])[1];
+      const hm = text.match(/(?:^|\D)(\d{1,2})[.:](\d{2})(?!\d)/);
+      let time = dt ? parseDate(dt) : null;
+      if (!time && hm) { const d = new Date(); time = danishLocalToIso(d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate(), +hm[1], +hm[2], 0); if (Date.parse(time) > Date.now() + 36e5) time = new Date(Date.parse(time) - 864e5).toISOString(); }
+      const key = 'link:' + m[2];
+      if (!found.has(key)) found.set(key, { text, time, region: '', url: 'https://www.dr.dk/trafik/' + m[2], title: parts.find(x => !/^\d{1,2}[.:]\d{2}$/.test(x)) || text });
+    }
     if (!found.size) {
       const hints = [...new Set([...html.matchAll(/https?:\/\/[^"'\s<>]*(?:api|traffic|trafik)[^"'\s<>]*/gi)].map(m => m[0]))].slice(0, 8);
       errors.push('Fandt ingen meldinger i siden' + (hints.length ? '. Mulige datakilder: ' + hints.join(' , ') : ''));
     }
-    for (const { text, time, region } of found.values()) {
+    for (const { text, time, region, url: link, title } of found.values()) {
       const pm = matchPlace(text) || matchPlace(region);
       if (!pm) continue;
       items.push({
         id: 'dr-' + hash(text), source: 'dr', sourceLabel: 'P4 Trafik',
-        time, title: text.split(/(?<=[.!?])\s/)[0].slice(0, 140), text,
-        url: CONFIG.dr.url, place: pm.place, kommune: pm.kommune, lat: pm.lat, lon: pm.lon, inArea: pm.inArea,
+        time, title: (title || text.split(/(?<=[.!?])\s/)[0]).slice(0, 140), text,
+        url: link || CONFIG.dr.url, place: pm.place, kommune: pm.kommune, lat: pm.lat, lon: pm.lon, inArea: pm.inArea,
         category: 'trafik',
       });
     }
@@ -431,15 +444,25 @@ export default {
     const url = new URL(request.url);
     if (request.method === 'OPTIONS') return new Response(null, { headers: CORS });
     if (url.pathname === '/api/debug-dr') {
-      const urls = ['https://api.dr.dk/trafik/subscribe', 'https://www.dr.dk/drn-traffic/map/', 'https://api.dr.dk/trafik/messages', 'https://api.dr.dk/trafik/api/messages'];
       const out = [];
+      try {
+        const html = await (await fetch('https://www.dr.dk/trafik', { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(9000) })).text();
+        const links = [...html.matchAll(/\/trafik\/([0-9a-f]{24})/g)];
+        const i = links.length ? links[0].index : -1;
+        out.push({ url: 'https://www.dr.dk/trafik', length: html.length, links: links.length,
+          around_first_link: i >= 0 ? html.slice(Math.max(0, i - 600), i + 1400) : null,
+          scripts: [...html.matchAll(/<script[^>]*src="([^"]+)"/g)].map(m => m[1]).slice(0, 15),
+          inline_json_hint: (html.match(/[{,]"(?:messages|items|reports|incidents|entries)":\[[\s\S]{0,400}/) || [''])[0] });
+      } catch (e) { out.push({ url: 'https://www.dr.dk/trafik', error: String(e.message || e) }); }
+      try { const r = await srcDr(ctx); out.push({ parsed_count: r.items.length, errors: r.errors, sample: r.items.slice(0, 3) }); } catch (e) { out.push({ parsed_error: String(e) }); }
+      const urls = ['https://api.dr.dk/trafik/latest', 'https://api.dr.dk/trafik/list', 'https://api.dr.dk/trafik/feed', 'https://api.dr.dk/trafik/events', 'https://api.dr.dk/trafik/v1/messages', 'https://api.dr.dk/trafik/reports'];
       for (const u of urls) {
         const t0 = Date.now();
         try {
           const res = await fetch(u, { headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json, text/event-stream, */*' }, signal: AbortSignal.timeout(9000) });
           let text = '';
           const reader = res.body.getReader(); const dec = new TextDecoder();
-          const stop = Date.now() + 5000;
+          const stop = Date.now() + 2500;
           while (text.length < 3000 && Date.now() < stop) {
             const r = await Promise.race([reader.read(), new Promise(ok => setTimeout(() => ok({ timeout: true }), Math.max(1, stop - Date.now())))]);
             if (r.timeout || r.done) break;

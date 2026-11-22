@@ -32,7 +32,7 @@ const CONFIG = {
   dr: { url: 'https://www.dr.dk/trafik' },
   // Lokale medier (RSS). Tilføj/fjern frit. Status vises i appen, så du kan se om et feed virker.
   media: [
-    { url: 'https://www.tveast.dk/rss', label: 'TV ØST' },
+    { url: 'https://www.tv2east.dk/rss', label: 'TV ØST' },
     // { url: 'https://www.sn.dk/rss/...', label: 'sn.dk' },  // indsæt sn.dk's RSS-adresse, hvis I har den
   ],
   cacheSeconds: 60,
@@ -348,6 +348,17 @@ async function srcDr(ctx) {
   return { items, errors };
 }
 
+/** Samme hændelse fra flere feeds/opdateringer → samme nøgle. */
+function dupKey(i) {
+  const t = String(i.title || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  if (i.source === 'odin') return 'odin|' + t + '|' + String(i.time || '').slice(0, 16);
+  if (i.source === 'vd') return 'vd|' + t + '|' + (i.lat != null ? (+i.lat).toFixed(2) + ',' + (+i.lon).toFixed(2) : String(i.text || '').slice(0, 80));
+  return i.source + '|' + t;
+}
+function better(a, b) { // er a bedre end b?
+  return (a.time || '') > (b.time || '') || ((a.time || '') === (b.time || '') && (a.text || '').length > (b.text || '').length);
+}
+
 // ───────────────────────── handler ─────────────────────────
 
 const CORS = {
@@ -378,14 +389,14 @@ async function buildFeed(ctx) {
   for (const i of results.flatMap(r => r.items)) {
     if (i.time && Date.parse(i.time) < minTime) continue;      // for gammel
     if (i.until && Date.parse(i.until) < now) continue;         // udløbet trafikmelding
-    const prev = byId.get(i.id);
+    const k = dupKey(i), prev = byId.get(k);
     // samme hændelse flere gange: behold den nyeste / mest udførlige version
-    if (!prev || (i.time || '') > (prev.time || '') || ((i.time || '') === (prev.time || '') && (i.text || '').length > (prev.text || '').length)) byId.set(i.id, i);
+    if (!prev || better(i, prev)) byId.set(k, i);
   }
   const items = [...byId.values()]
     .sort((a, b) => (b.time || '').localeCompare(a.time || ''))
     .slice(0, 400);
-  for (const r of results) { r.items = r.items.filter(i => byId.get(i.id) === i); }
+  for (const r of results) { r.items = r.items.filter(i => byId.get(dupKey(i)) === i); }
   return {
     updated: new Date().toISOString(),
     area: KOMMUNER,

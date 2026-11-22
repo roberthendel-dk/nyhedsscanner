@@ -172,6 +172,22 @@ function ago(iso) {
   const h = Math.round(m / 60); return h < 24 ? h + ' t siden' : '';
 }
 
+/** Samme hændelse fra flere feeds/opdateringer → samme nøgle. */
+function dupKey(i) {
+  const t = String(i.title || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  if (i.source === 'odin') return 'odin|' + t + '|' + String(i.time || '').slice(0, 16);
+  if (i.source === 'vd') return 'vd|' + t + '|' + (i.lat != null ? (+i.lat).toFixed(2) + ',' + (+i.lon).toFixed(2) : String(i.text || '').slice(0, 80));
+  return i.source + '|' + t;
+}
+function better(a, b) { // er a bedre end b?
+  return (a.time || '') > (b.time || '') || ((a.time || '') === (b.time || '') && (a.text || '').length > (b.text || '').length);
+}
+function dedupe(items) {
+  const m = new Map();
+  for (const i of items) { const k = dupKey(i), p = m.get(k); if (!p || better(i, p)) m.set(k, i); }
+  return [...m.values()].sort((a, b) => (b.time || '').localeCompare(a.time || ''));
+}
+
 function renderChips() {
   $('srcChips').innerHTML = SOURCES.map(([k, l]) =>
     `<button type="button" class="chip" data-src="${k}" aria-pressed="${!!state.srcOn[k]}">${l}</button>`).join('');
@@ -256,6 +272,7 @@ async function load() {
       data = demoData();
       $('demoNote').hidden = false;
     }
+    data.items = dedupe(data.items || []);
     for (const i of data.items) i._new = !state.firstLoad && !state.seen.has(i.id);
     // første indlæsning: markér meldinger fra de sidste 15 min som nye, hvis de ikke er set før
     if (state.firstLoad) for (const i of data.items) if (!state.seen.has(i.id) && i.time && Date.now() - new Date(i.time) < 15 * 6e4) i._new = true;

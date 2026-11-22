@@ -11,7 +11,7 @@
  * Ret kilder og byer i CONFIG herunder. Intet andet skal ændres.
  */
 
-const VERSION = '6';
+const VERSION = '7';
 
 const CONFIG = {
   // ODIN RSS pr. beredskab. "areaDefault" = hændelser regnes som lokale, medmindre stationen ligger uden for området.
@@ -444,33 +444,44 @@ export default {
     const url = new URL(request.url);
     if (request.method === 'OPTIONS') return new Response(null, { headers: CORS });
     if (url.pathname === '/api/debug-dr') {
-      const out = [];
-      try {
-        const html = await (await fetch('https://www.dr.dk/trafik', { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(9000) })).text();
-        const links = [...html.matchAll(/\/trafik\/([0-9a-f]{24})/g)];
-        const i = links.length ? links[0].index : -1;
-        out.push({ url: 'https://www.dr.dk/trafik', length: html.length, links: links.length,
-          around_first_link: i >= 0 ? html.slice(Math.max(0, i - 600), i + 1400) : null,
-          scripts: [...html.matchAll(/<script[^>]*src="([^"]+)"/g)].map(m => m[1]).slice(0, 15),
-          inline_json_hint: (html.match(/[{,]"(?:messages|items|reports|incidents|entries)":\[[\s\S]{0,400}/) || [''])[0] });
-      } catch (e) { out.push({ url: 'https://www.dr.dk/trafik', error: String(e.message || e) }); }
-      try { const r = await srcDr(ctx); out.push({ parsed_count: r.items.length, errors: r.errors, sample: r.items.slice(0, 3) }); } catch (e) { out.push({ parsed_error: String(e) }); }
-      const urls = ['https://api.dr.dk/trafik/latest', 'https://api.dr.dk/trafik/list', 'https://api.dr.dk/trafik/feed', 'https://api.dr.dk/trafik/events', 'https://api.dr.dk/trafik/v1/messages', 'https://api.dr.dk/trafik/reports'];
-      for (const u of urls) {
+      const out = { version: VERSION };
+      const get = async (u, ms = 6000) => {
         const t0 = Date.now();
         try {
-          const res = await fetch(u, { headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json, text/event-stream, */*' }, signal: AbortSignal.timeout(9000) });
+          const res = await fetch(u, { headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json, */*', 'Referer': 'https://www.dr.dk/trafik' }, signal: AbortSignal.timeout(ms) });
+          const type = res.headers.get('content-type') || '';
           let text = '';
-          const reader = res.body.getReader(); const dec = new TextDecoder();
-          const stop = Date.now() + 2500;
-          while (text.length < 3000 && Date.now() < stop) {
-            const r = await Promise.race([reader.read(), new Promise(ok => setTimeout(() => ok({ timeout: true }), Math.max(1, stop - Date.now())))]);
-            if (r.timeout || r.done) break;
-            text += dec.decode(r.value, { stream: true });
-          }
-          try { reader.cancel(); } catch (_) {}
-          out.push({ url: u, status: res.status, type: res.headers.get('content-type'), ms: Date.now() - t0, start: text.slice(0, 3000) });
-        } catch (e) { out.push({ url: u, error: String(e && e.message || e), ms: Date.now() - t0 }); }
+          if (/event-stream/.test(type)) { try { res.body.cancel(); } catch (_) {} text = '(event-stream)'; }
+          else text = await res.text();
+          return { status: res.status, type, ms: Date.now() - t0, text };
+        } catch (e) { return { error: String(e && e.message || e), ms: Date.now() - t0 }; }
+      };
+      const js = await get('https://www.dr.dk/trafik/static/pub-build.js', 9000);
+      out.bundle = { status: js.status, length: (js.text || '').length, error: js.error };
+      const src = js.text || '';
+      // alle tekststrenge, der ligner adresser eller API-stier
+      const strs = new Set();
+      for (const m of src.matchAll(/["'`]((?:https?:)?\/\/[^"'`\s]{4,200}|\/[A-Za-z0-9_\-./${}]{2,120})["'`]/g)) {
+        const s = m[1];
+        if (/\.(png|jpe?g|svg|gif|css|woff2?|ico)(\?|$)/i.test(s)) continue;
+        if (/api|trafik|traffic|message|event|report|incident|feed|subscribe|graphql|search|region/i.test(s)) strs.add(s);
+      }
+      out.strings = [...strs].slice(0, 80);
+      // stumper omkring fetch-kald
+      out.fetch_snippets = [...src.matchAll(/(?:fetch|axios\.get|EventSource)\s*\(([\s\S]{0,180})/g)].map(m => m[1].replace(/\s+/g, ' ')).slice(0, 15);
+      // prøv kandidaterne
+      const cands = [];
+      for (const s of out.strings) {
+        if (s.includes('${') || /subscribe/i.test(s)) continue;
+        let u = s.startsWith('//') ? 'https:' + s : s.startsWith('/') ? 'https://api.dr.dk' + s : s;
+        if (!/^https:\/\/[^/]*dr\.dk\//.test(u)) continue;
+        cands.push(u);
+        if (s.startsWith('/')) cands.push('https://www.dr.dk' + s);
+      }
+      out.tried = [];
+      for (const u of [...new Set(cands)].slice(0, 14)) {
+        const r = await get(u, 4000);
+        out.tried.push({ url: u, status: r.status, type: r.type, error: r.error, start: (r.text || '').slice(0, 400) });
       }
       return new Response(JSON.stringify(out, null, 1), { headers: { ...CORS, 'Content-Type': 'application/json; charset=utf-8' } });
     }

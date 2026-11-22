@@ -222,6 +222,13 @@ function visible() {
   });
 }
 
+// Ekstra links ved visse kilder
+const MSBR_URL = 'https://msbr.dk/doegnrapport/';
+function isMsbr(i) {
+  if (i.source !== 'odin') return false;
+  return /Midt- og Sydsjællands/i.test(i.text || '') || ['Faxe', 'Næstved', 'Vordingborg'].includes(i.kommune) || /ringsted/i.test(i.place || '');
+}
+
 function render() {
   const list = visible();
   if (!list.length) {
@@ -251,6 +258,7 @@ function render() {
           ${long ? '<button type="button" data-act="more">Vis mere</button>' : ''}
           <button type="button" data-act="copy">Kopiér notits</button>
           ${i.url ? `<a href="${escH(i.url)}" target="_blank" rel="noopener">Kilde</a>` : ''}
+          ${isMsbr(i) ? `<a href="${MSBR_URL}" target="_blank" rel="noopener">MSBR døgnrapport</a>` : ''}
         </div>
       </div>
     </article>`;

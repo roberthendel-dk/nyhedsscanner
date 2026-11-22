@@ -32,10 +32,11 @@ const CONFIG = {
   dr: { url: 'https://www.dr.dk/trafik' },
   // Lokale medier (RSS). Tilføj/fjern frit. Status vises i appen, så du kan se om et feed virker.
   media: [
-    { url: 'https://www.tvoest.dk/rss', label: 'TV ØST' },
+    { url: 'https://www.tveast.dk/rss', label: 'TV ØST' },
     // { url: 'https://www.sn.dk/rss/...', label: 'sn.dk' },  // indsæt sn.dk's RSS-adresse, hvis I har den
   ],
   cacheSeconds: 60,
+  maxAgeDays: 7, // ældre meldinger vises ikke
   timeoutMs: 8000, // en kilde, der ikke svarer inden da, springes over i denne runde
 };
 
@@ -205,7 +206,9 @@ async function srcOdin(ctx) {
   const errors = [];
   await Promise.all(CONFIG.odin.map(async f => {
     try {
-      const xml = await fetchText('https://www.odin.dk/RSS/RSS.aspx?beredskabsID=' + f.id, ctx);
+      let xml;
+      try { xml = await fetchText('http://www.odin.dk/RSS/RSS.aspx?beredskabsID=' + f.id, ctx); }
+      catch (e1) { xml = await fetchText('https://www.odin.dk/RSS/RSS.aspx?beredskabsID=' + f.id, ctx); }
       for (const it of parseRss(xml)) {
         const all = (it.title + ' ' + it.description).replace(/\s+/g, ' ');
         const melding = (all.match(/Førstemelding:\s*(.*?)\s*(?:Station:|$)/i) || [])[1] || it.title;
@@ -243,7 +246,7 @@ async function srcRss(list, source, sourceLabelFn, category, ctx) {
         const full = it.title + '\n' + it.description;
         const pm = matchPlace(full);
         items.push({
-          id: source + '-' + hash(it.guid || it.link || it.title),
+          id: source + '-' + hash(((it.link || it.guid || it.title) + '').split('#')[0]),
           source, sourceLabel: sourceLabelFn(f),
           time: parseDate(it.pubDate), title: it.title, text: it.description.slice(0, 1200),
           url: it.link, place: pm ? pm.place : '', kommune: pm ? pm.kommune : null,
@@ -327,7 +330,10 @@ async function srcDr(ctx) {
       keys.forEach(k => walk(o[k], depth + 1));
     };
     for (const b of blobs) { try { walk(JSON.parse(b), 0); } catch (_) { /* ikke JSON */ } }
-    if (!blobs.length) errors.push('Fandt ingen data i siden – DR har måske ændret opbygning');
+    if (!found.size) {
+      const hints = [...new Set([...html.matchAll(/https?:\/\/[^"'\s<>]*(?:api|traffic|trafik)[^"'\s<>]*/gi)].map(m => m[0]))].slice(0, 8);
+      errors.push('Fandt ingen meldinger i siden' + (hints.length ? '. Mulige datakilder: ' + hints.join(' , ') : ''));
+    }
     for (const { text, time, region } of found.values()) {
       const pm = matchPlace(text) || matchPlace(region);
       if (!pm) continue;
@@ -367,9 +373,19 @@ async function buildFeed(ctx) {
       return { key, label, items: [], errors: [e.message], ms: Date.now() - t0 };
     }
   }));
-  const items = results.flatMap(r => r.items)
+  const now = Date.now(), minTime = now - CONFIG.maxAgeDays * 864e5;
+  const byId = new Map();
+  for (const i of results.flatMap(r => r.items)) {
+    if (i.time && Date.parse(i.time) < minTime) continue;      // for gammel
+    if (i.until && Date.parse(i.until) < now) continue;         // udløbet trafikmelding
+    const prev = byId.get(i.id);
+    // samme hændelse flere gange: behold den nyeste / mest udførlige version
+    if (!prev || (i.time || '') > (prev.time || '') || ((i.time || '') === (prev.time || '') && (i.text || '').length > (prev.text || '').length)) byId.set(i.id, i);
+  }
+  const items = [...byId.values()]
     .sort((a, b) => (b.time || '').localeCompare(a.time || ''))
     .slice(0, 400);
+  for (const r of results) { r.items = r.items.filter(i => byId.get(i.id) === i); }
   return {
     updated: new Date().toISOString(),
     area: KOMMUNER,

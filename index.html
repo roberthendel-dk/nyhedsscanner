@@ -109,8 +109,7 @@ footer{font-size:12px;color:var(--mut);padding:24px 0 40px}
 
 <footer class="wrap">
   Kilder: <a href="https://www.odin.dk/112puls/" rel="noopener">ODIN 112-puls, Beredskabsstyrelsen</a> ·
-  Politiets meldinger via Ritzau · <a href="https://trafikkort.vejdirektoratet.dk/" rel="noopener">Vejdirektoratet</a> ·
-  <a href="https://www.dr.dk/trafik" rel="noopener">DR P4 Trafik</a> · lokale medier. ODIN-data må kun bringes med tydelig kildeangivelse og link til odin.dk/112puls.
+  Politiets meldinger via Ritzau · <a href="https://trafikkort.vejdirektoratet.dk/" rel="noopener">Vejdirektoratet</a> · lokale medier. ODIN-data må kun bringes med tydelig kildeangivelse og link til odin.dk/112puls.
 </footer>
 
 <dialog id="settings">
@@ -134,7 +133,7 @@ footer{font-size:12px;color:var(--mut);padding:24px 0 40px}
 {
 const DEFAULT_URL = 'https://super-dream-aca8.robert-hendel.workers.dev';
 const SOURCES = [
-  ['odin', 'ODIN 112'], ['politi', 'Politi'], ['vd', 'Vejdirektoratet'], ['dr', 'P4 Trafik'], ['medier', 'Lokale medier'],
+  ['odin', 'ODIN 112'], ['politi', 'Politi'], ['vd', 'Vejdirektoratet'], ['medier', 'Lokale medier'],
 ];
 const KOMMUNER = ['Faxe', 'Sorø', 'Næstved', 'Vordingborg', 'Slagelse'];
 const ROUTINE = /\b(ISL-?Forespørgsel|ISL-?Eftersyn|Eftersyn|Prøve|Forespørgsel|Elevator stop)\b/i;
@@ -343,7 +342,6 @@ function demoData() {
     { id: 'd1', source: 'odin', sourceLabel: 'ODIN 112-puls', time: t(4), title: 'Bygn.brand-Villa/Rækkehus', text: 'Station: Næstved · Midt- og Sydsjællands Brand & Redning', url: 'https://www.odin.dk/112puls/', place: 'Næstved', kommune: 'Næstved', inArea: true },
     { id: 'd2', source: 'politi', sourceLabel: 'Politi · Sydsjællands og Lolland-Falsters', time: t(11), title: 'Færdselsuheld på Ringstedvej ved Haslev', text: 'Politiet er til stede ved et færdselsuheld mellem to personbiler. Vejen er spærret i begge retninger, og trafikken omdirigeres.', url: 'https://politi.dk', place: 'Haslev', kommune: 'Faxe', inArea: true },
     { id: 'd3', source: 'vd', sourceLabel: 'Vejdirektoratet', time: t(23), title: 'E20 Vestmotorvejen', text: 'Uheld mellem 37 Sorø og 38 Slagelse i retning mod Odense. Ét spor spærret.', url: 'https://trafikkort.vejdirektoratet.dk/', place: 'Sorø (3 km)', kommune: 'Sorø', inArea: true },
-    { id: 'd4', source: 'dr', sourceLabel: 'P4 Trafik', time: t(35), title: 'Sydmotorvejen ved Rønnede: Kø mod København efter uheld.', text: 'Sydmotorvejen ved Rønnede: Kø mod København efter uheld.', url: 'https://www.dr.dk/trafik', place: 'Rønnede', kommune: 'Faxe', inArea: true },
     { id: 'd5', source: 'odin', sourceLabel: 'ODIN 112-puls', time: t(52), title: 'ISL-Forespørgsel', text: 'Station: Korsør · Slagelse Brand & Redning', url: 'https://www.odin.dk/112puls/', place: 'Korsør', kommune: 'Slagelse', inArea: true },
     { id: 'd6', source: 'medier', sourceLabel: 'TV2 Øst', time: t(70), title: 'Container i brand ved skole i Vordingborg', text: 'Brandvæsenet rykkede ud til en containerbrand. Ingen personer kom til skade.', url: 'https://www.tvoest.dk', place: 'Vordingborg', kommune: 'Vordingborg', inArea: true },
     { id: 'd7', source: 'politi', sourceLabel: 'Politi · Sydsjællands og Lolland-Falsters', time: t(95), title: 'Efterlysning: 80-årig savnet i Nykøbing F', text: 'Politiet efterlyser en 80-årig mand.', url: 'https://politi.dk', place: 'Nykøbing F', kommune: null, inArea: false },

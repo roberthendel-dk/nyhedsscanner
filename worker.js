@@ -1,6 +1,6 @@
 /**
  * Nyhedsvagtens værktøjskasse · Cloudflare Worker
- * Henter ODIN 112-puls, politiets meldinger (Ritzau), Vejdirektoratet, DR P4 Trafik
+ * Henter ODIN 112-puls, politiets meldinger (Ritzau), Vejdirektoratet
  * og lokale medier, filtrerer til Faxe, Sorø, Næstved, Vordingborg og Slagelse
  * og returnerer én samlet JSON-liste med CORS, så webappen kan læse den fra alle enheder.
  *
@@ -11,7 +11,7 @@
  * Ret kilder og byer i CONFIG herunder. Intet andet skal ændres.
  */
 
-const VERSION = '7';
+const VERSION = '8';
 
 const CONFIG = {
   // ODIN RSS pr. beredskab. "areaDefault" = hændelser regnes som lokale, medmindre stationen ligger uden for området.
@@ -30,8 +30,6 @@ const CONFIG = {
     critical: 'https://storage.googleapis.com/trafikkort-data/geojson/critical-announcements.json',
     maxKm: 9, // hændelser tættere end dette på en by i listen regnes som lokale
   },
-  // DR P4 Trafik har intet officielt feed. Siden læses "best effort".
-  dr: { url: 'https://www.dr.dk/trafik' },
   // Lokale medier (RSS). Tilføj/fjern frit. Status vises i appen, så du kan se om et feed virker.
   // Kun artikler om hændelser (brand, uheld, politi osv.) fra medierne. Sæt til false for at få alle lokale artikler.
   mediaOnlyIncidents: true,
@@ -321,63 +319,6 @@ async function srcVd(ctx) {
   return { items, errors };
 }
 
-/** DR P4 Trafik: læser JSON indlejret i siden og samler tekstmeldinger. Eksperimentel. */
-async function srcDr(ctx) {
-  const items = [], errors = [];
-  try {
-    const html = await fetchText(CONFIG.dr.url, ctx);
-    const blobs = [];
-    for (const m of html.matchAll(/<script[^>]*type="application\/(?:ld\+)?json"[^>]*>([\s\S]*?)<\/script>/gi)) blobs.push(m[1]);
-    for (const m of html.matchAll(/window\.__[A-Za-z_]+__\s*=\s*(\{[\s\S]*?\});?\s*<\/script>/g)) blobs.push(m[1]);
-    const found = new Map();
-    const TEXT = ['text', 'body', 'description', 'message', 'content', 'summary', 'teaser', 'title'];
-    const TIME = ['time', 'date', 'published', 'publishedAt', 'created', 'createdAt', 'updated', 'updatedAt', 'timestamp', 'startTime', 'startDate'];
-    const walk = (o, depth) => {
-      if (!o || depth > 14) return;
-      if (Array.isArray(o)) { o.forEach(x => walk(x, depth + 1)); return; }
-      if (typeof o !== 'object') return;
-      const keys = Object.keys(o);
-      const tk = TEXT.find(k => typeof o[k] === 'string' && stripHtml(o[k]).length >= 25 && keys.some(x => TIME.includes(x)));
-      if (tk) {
-        const text = stripHtml(o[tk]);
-        const timeKey = TIME.find(k => o[k]);
-        const region = [o.region, o.area, o.location, o.regionName].filter(x => typeof x === 'string').join(' ');
-        if (!found.has(text)) found.set(text, { text, time: parseDate(o[timeKey]), region });
-      }
-      keys.forEach(k => walk(o[k], depth + 1));
-    };
-    for (const b of blobs) { try { walk(JSON.parse(b), 0); } catch (_) { /* ikke JSON */ } }
-    // Meldinger som links i siden: /trafik/<24 tegns id>
-    for (const m of html.matchAll(/<a[^>]+href="((?:https:\/\/www\.dr\.dk)?\/trafik\/([0-9a-f]{24}))"[^>]*>([\s\S]*?)<\/a>/gi)) {
-      const inner = m[3];
-      const parts = inner.split(/<\/(?:h\d|p|div|span|time)>/i).map(stripHtml).filter(Boolean);
-      const text = parts.join(' · ').replace(/\s+/g, ' ').trim();
-      if (text.length < 10) continue;
-      const dt = (inner.match(/datetime="([^"]+)"/i) || [])[1];
-      const hm = text.match(/(?:^|\D)(\d{1,2})[.:](\d{2})(?!\d)/);
-      let time = dt ? parseDate(dt) : null;
-      if (!time && hm) { const d = new Date(); time = danishLocalToIso(d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate(), +hm[1], +hm[2], 0); if (Date.parse(time) > Date.now() + 36e5) time = new Date(Date.parse(time) - 864e5).toISOString(); }
-      const key = 'link:' + m[2];
-      if (!found.has(key)) found.set(key, { text, time, region: '', url: 'https://www.dr.dk/trafik/' + m[2], title: parts.find(x => !/^\d{1,2}[.:]\d{2}$/.test(x)) || text });
-    }
-    if (!found.size) {
-      const hints = [...new Set([...html.matchAll(/https?:\/\/[^"'\s<>]*(?:api|traffic|trafik)[^"'\s<>]*/gi)].map(m => m[0]))].slice(0, 8);
-      errors.push('Fandt ingen meldinger i siden' + (hints.length ? '. Mulige datakilder: ' + hints.join(' , ') : ''));
-    }
-    for (const { text, time, region, url: link, title } of found.values()) {
-      const pm = matchPlace(text) || matchPlace(region);
-      if (!pm) continue;
-      items.push({
-        id: 'dr-' + hash(text), source: 'dr', sourceLabel: 'P4 Trafik',
-        time, title: (title || text.split(/(?<=[.!?])\s/)[0]).slice(0, 140), text,
-        url: link || CONFIG.dr.url, place: pm.place, kommune: pm.kommune, lat: pm.lat, lon: pm.lon, inArea: pm.inArea,
-        category: 'trafik',
-      });
-    }
-  } catch (e) { errors.push(e.message); }
-  return { items, errors };
-}
-
 /** Samme hændelse fra flere feeds/opdateringer → samme nøgle. */
 function dupKey(i) {
   const t = String(i.title || '').toLowerCase().replace(/\s+/g, ' ').trim();
@@ -402,7 +343,6 @@ async function buildFeed(ctx) {
     ['odin', 'ODIN 112-puls', () => srcOdin(ctx)],
     ['politi', 'Politiet', () => srcRss(CONFIG.politi, 'politi', f => 'Politi · ' + f.label.replace(' Politi', ''), 'politi', ctx)],
     ['vd', 'Vejdirektoratet', () => srcVd(ctx)],
-    ['dr', 'P4 Trafik', () => srcDr(ctx)],
     ['medier', 'Lokale medier', () => srcRss(CONFIG.media, 'medier', f => f.label, 'medier', ctx)],
   ];
   const results = await Promise.all(defs.map(async ([key, label, fn]) => {
@@ -443,48 +383,6 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     if (request.method === 'OPTIONS') return new Response(null, { headers: CORS });
-    if (url.pathname === '/api/debug-dr') {
-      const out = { version: VERSION };
-      const get = async (u, ms = 6000) => {
-        const t0 = Date.now();
-        try {
-          const res = await fetch(u, { headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json, */*', 'Referer': 'https://www.dr.dk/trafik' }, signal: AbortSignal.timeout(ms) });
-          const type = res.headers.get('content-type') || '';
-          let text = '';
-          if (/event-stream/.test(type)) { try { res.body.cancel(); } catch (_) {} text = '(event-stream)'; }
-          else text = await res.text();
-          return { status: res.status, type, ms: Date.now() - t0, text };
-        } catch (e) { return { error: String(e && e.message || e), ms: Date.now() - t0 }; }
-      };
-      const js = await get('https://www.dr.dk/trafik/static/pub-build.js', 9000);
-      out.bundle = { status: js.status, length: (js.text || '').length, error: js.error };
-      const src = js.text || '';
-      // alle tekststrenge, der ligner adresser eller API-stier
-      const strs = new Set();
-      for (const m of src.matchAll(/["'`]((?:https?:)?\/\/[^"'`\s]{4,200}|\/[A-Za-z0-9_\-./${}]{2,120})["'`]/g)) {
-        const s = m[1];
-        if (/\.(png|jpe?g|svg|gif|css|woff2?|ico)(\?|$)/i.test(s)) continue;
-        if (/api|trafik|traffic|message|event|report|incident|feed|subscribe|graphql|search|region/i.test(s)) strs.add(s);
-      }
-      out.strings = [...strs].slice(0, 80);
-      // stumper omkring fetch-kald
-      out.fetch_snippets = [...src.matchAll(/(?:fetch|axios\.get|EventSource)\s*\(([\s\S]{0,180})/g)].map(m => m[1].replace(/\s+/g, ' ')).slice(0, 15);
-      // prøv kandidaterne
-      const cands = [];
-      for (const s of out.strings) {
-        if (s.includes('${') || /subscribe/i.test(s)) continue;
-        let u = s.startsWith('//') ? 'https:' + s : s.startsWith('/') ? 'https://api.dr.dk' + s : s;
-        if (!/^https:\/\/[^/]*dr\.dk\//.test(u)) continue;
-        cands.push(u);
-        if (s.startsWith('/')) cands.push('https://www.dr.dk' + s);
-      }
-      out.tried = [];
-      for (const u of [...new Set(cands)].slice(0, 14)) {
-        const r = await get(u, 4000);
-        out.tried.push({ url: u, status: r.status, type: r.type, error: r.error, start: (r.text || '').slice(0, 400) });
-      }
-      return new Response(JSON.stringify(out, null, 1), { headers: { ...CORS, 'Content-Type': 'application/json; charset=utf-8' } });
-    }
     if (url.pathname === '/api/feed') {
       let body;
       try { body = await buildFeed(ctx); }
@@ -498,4 +396,4 @@ export default {
 };
 
 // Eksporter til test i Node (ignoreres af Cloudflare)
-export const _test = { parseRss, parseDate, matchPlace, nearestPlace, stripHtml, srcOdin, srcVd, srcDr, srcRss, buildFeed, CONFIG };
+export const _test = { parseRss, parseDate, matchPlace, nearestPlace, stripHtml, srcOdin, srcVd, srcRss, buildFeed, CONFIG };

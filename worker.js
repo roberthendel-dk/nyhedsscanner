@@ -36,6 +36,7 @@ const CONFIG = {
     // { url: 'https://www.sn.dk/rss/...', label: 'sn.dk' },  // indsæt sn.dk's RSS-adresse, hvis I har den
   ],
   cacheSeconds: 60,
+  timeoutMs: 8000, // en kilde, der ikke svarer inden da, springes over i denne runde
 };
 
 // Byer → kommune + koordinater (lat, lon). Bruges til at placere og filtrere hændelser.
@@ -189,10 +190,11 @@ async function fetchText(url, ctx) {
   const res = await fetch(url, {
     headers: { 'User-Agent': 'Mozilla/5.0 (Nyhedsvagtens vaerktoejskasse; redaktionelt overblik)', 'Accept': '*/*' },
     cf: { cacheTtl: CONFIG.cacheSeconds },
-  });
+    signal: AbortSignal.timeout(CONFIG.timeoutMs),
+  }).catch(e => { throw new Error(e && e.name === 'TimeoutError' ? 'svarede ikke inden ' + CONFIG.timeoutMs / 1000 + ' sek.' : (e && e.message) || 'netværksfejl'); });
   if (!res.ok) throw new Error('HTTP ' + res.status);
   const body = await res.text();
-  ctx && ctx.waitUntil(cache.put(key, new Response(body, { headers: { 'Cache-Control': 'max-age=' + CONFIG.cacheSeconds } })));
+  ctx && ctx.waitUntil && ctx.waitUntil(cache.put(key, new Response(body, { headers: { 'Cache-Control': 'max-age=' + CONFIG.cacheSeconds } })).catch(() => {}));
   return body;
 }
 
@@ -384,7 +386,9 @@ export default {
     const url = new URL(request.url);
     if (request.method === 'OPTIONS') return new Response(null, { headers: CORS });
     if (url.pathname === '/api/feed') {
-      const body = await buildFeed(ctx);
+      let body;
+      try { body = await buildFeed(ctx); }
+      catch (e) { body = { updated: new Date().toISOString(), items: [], sources: [], error: String(e && e.stack || e) }; }
       return new Response(JSON.stringify(body), {
         headers: { ...CORS, 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'max-age=20' },
       });

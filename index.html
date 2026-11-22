@@ -118,7 +118,7 @@ footer{font-size:12px;color:var(--mut);padding:24px 0 40px}
     <h2>Indstillinger</h2>
     <label for="workerUrl">Worker-adresse</label>
     <input type="url" id="workerUrl" placeholder="https://nyhedsvagten.dit-navn.workers.dev">
-    <div class="hint">Tom = eksempeldata. Appen henter <code>/api/feed</code> fra denne adresse.</div>
+    <div class="hint">Udfyldt på forhånd med redaktionens worker. Tom = redaktionens worker.</div>
     <label for="interval">Opdateringsinterval</label>
     <select id="interval" class="btn ghost">
       <option value="30">30 sek.</option><option value="60">1 min.</option><option value="120">2 min.</option><option value="300">5 min.</option>
@@ -132,6 +132,7 @@ footer{font-size:12px;color:var(--mut);padding:24px 0 40px}
 
 <script>
 {
+const DEFAULT_URL = 'https://super-dream-aca8.robert-hendel.workers.dev';
 const SOURCES = [
   ['odin', 'ODIN 112'], ['politi', 'Politi'], ['vd', 'Vejdirektoratet'], ['dr', 'P4 Trafik'], ['medier', 'Lokale medier'],
 ];
@@ -150,7 +151,7 @@ const state = {
   kOn: store.get('kOn', Object.fromEntries(KOMMUNER.map(k => [k, true]))),
   seen: new Set(store.get('seen', [])),
   firstLoad: true, nextAt: 0, timer: null,
-  cfg: store.get('cfg', { url: '', interval: 60 }),
+  cfg: (c => ({ interval: 60, ...c, url: c.url || DEFAULT_URL }))(store.get('cfg', {})),
 };
 
 const $ = id => document.getElementById(id);

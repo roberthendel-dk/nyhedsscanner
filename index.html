@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="da">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#111111">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Nyhedsvagtens værktøjskasse</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Libre+Franklin:wght@400;600;800&family=Source+Serif+4:opsz,wght@8..60,400;8..60,700&display=swap" rel="stylesheet">
+<style>
+/* VOICE: avisens vagthavende nyhedsdesk – nøgtern, hurtig, alvorlig
+   IDEA: en avisspalte med "seneste nyt"-telegrammer, hvor hver melding er en notits med tidsstempel
+   PICTURE: selve meldingslisten med store hængende klokkeslæt
+   COLOUR+TYPE: avispapir hvid, sort tryk, én rød 112-accent; Source Serif til overskrifter, Franklin til data
+   LAYOUT: tynd hovedlinje, filterlinje, én læsespalte med klokkeslæt i margen */
+:root{color-scheme:light dark;
+  --bg:light-dark(#ffffff,#121212);--ink:light-dark(#111111,#ececec);--mut:light-dark(#5d5d5d,#a3a3a3);
+  --rule:light-dark(#d9d9d9,#333333);--soft:light-dark(#f4f4f2,#1c1c1c);--red:light-dark(#c8102e,#ff4d5e);--new:light-dark(#fff4c2,#3a3212)}
+:root[data-theme=light]{color-scheme:light}:root[data-theme=dark]{color-scheme:dark}
+*{box-sizing:border-box;min-width:0}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 "Libre Franklin",system-ui,sans-serif;overflow-x:clip}
+a{color:inherit}
+.wrap{max-width:980px;margin:0 auto;padding:0 max(4vw,14px)}
+header{border-bottom:3px double var(--ink);padding:18px 0 10px}
+.mast{display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap}
+h1{font:700 clamp(30px,6vw,46px)/1.05 "Source Serif 4",Georgia,serif;margin:0;letter-spacing:-.01em}
+h1 b{color:var(--red)}
+.dateline{font-size:13px;color:var(--mut);display:flex;gap:14px;flex-wrap:wrap;align-items:center}
+.dateline button{font:inherit}
+.live{display:inline-flex;align-items:center;gap:6px}
+.dot{width:9px;height:9px;border-radius:50%;background:var(--mut)}
+.dot.ok{background:#1f9d55}.dot.err{background:var(--red)}
+@media(prefers-reduced-motion:no-preference){.dot.ok{animation:pulse 2s infinite}}
+@keyframes pulse{50%{opacity:.35}}
+.sources{display:flex;gap:6px 16px;flex-wrap:wrap;font-size:13px;color:var(--mut);padding:8px 0;border-bottom:1px solid var(--rule)}
+.sources span{display:inline-flex;gap:5px;align-items:center;white-space:nowrap;cursor:help}
+.bar{position:sticky;top:0;z-index:5;background:var(--bg);border-bottom:1px solid var(--rule);padding:10px 0}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.row+.row{margin-top:8px}
+.chip{font:600 14px "Libre Franklin",sans-serif;border:1px solid var(--ink);background:transparent;color:var(--ink);border-radius:2px;padding:0 12px;min-height:36px;cursor:pointer}
+.chip[aria-pressed=false]{border-color:var(--rule);color:var(--mut);text-decoration:line-through;text-decoration-color:var(--rule)}
+.chip:focus-visible,button:focus-visible,input:focus-visible{outline:2px solid var(--red);outline-offset:2px}
+.chip.k[aria-pressed=true]{background:var(--ink);color:var(--bg)}
+input[type=search]{font:16px "Libre Franklin",sans-serif;border:1px solid var(--rule);background:var(--bg);color:var(--ink);padding:0 10px;min-height:40px;flex:1 1 200px;border-radius:2px}
+label.tg{display:inline-flex;gap:6px;align-items:center;font-size:14px;min-height:40px;cursor:pointer;white-space:nowrap}
+label.tg input{width:18px;height:18px;accent-color:var(--red)}
+.btn{font:600 14px "Libre Franklin",sans-serif;background:var(--ink);color:var(--bg);border:0;border-radius:2px;padding:0 14px;min-height:40px;cursor:pointer}
+.btn.ghost{background:transparent;color:var(--ink);border:1px solid var(--rule)}
+.notice{background:var(--soft);border-left:4px solid var(--red);padding:12px 14px;margin:14px 0;font-size:15px}
+.day{font:700 13px "Libre Franklin",sans-serif;text-transform:none;color:var(--mut);border-bottom:1px solid var(--ink);padding:22px 0 4px;margin:0}
+.item{display:grid;grid-template-columns:64px minmax(0,1fr);gap:4px 16px;padding:12px 0;border-bottom:1px solid var(--rule)}
+.item.new{background:linear-gradient(90deg,var(--new),transparent 70%)}
+.time{font:700 22px/1.1 "Source Serif 4",Georgia,serif;white-space:nowrap}
+.time small{display:block;font:400 12px "Libre Franklin",sans-serif;color:var(--mut);margin-top:3px}
+.meta{font-size:13px;color:var(--mut);display:flex;gap:4px 10px;flex-wrap:wrap;align-items:center}
+.src{font-weight:800;color:var(--ink)}
+.src.odin{color:var(--red)}
+.tagk{border:1px solid var(--rule);padding:0 6px;border-radius:2px;white-space:nowrap}
+.flag{color:var(--bg);background:var(--red);font-weight:800;font-size:11px;padding:1px 5px;border-radius:2px}
+.item h3{font:700 19px/1.25 "Source Serif 4",Georgia,serif;margin:3px 0 2px}
+.item.alvor h3::before{content:"";display:inline-block;width:10px;height:10px;background:var(--red);margin-right:8px;vertical-align:1px}
+.item.out{opacity:.6}
+.item p{margin:2px 0;font-size:15px;color:var(--ink);white-space:pre-line;overflow-wrap:anywhere}
+.item p.clamp{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.acts{display:flex;gap:14px;font-size:13px;margin-top:4px}
+.acts a,.acts button{color:var(--mut);background:none;border:0;padding:6px 0;font:inherit;cursor:pointer;text-decoration:underline;text-underline-offset:2px}
+.empty{padding:40px 0;color:var(--mut);text-align:center}
+dialog{border:1px solid var(--ink);border-radius:2px;background:var(--bg);color:var(--ink);max-width:560px;width:calc(100% - 28px);padding:20px}
+dialog::backdrop{background:rgba(0,0,0,.45)}
+dialog h2{font:700 24px "Source Serif 4",Georgia,serif;margin:0 0 10px}
+dialog label{display:block;font-weight:600;font-size:14px;margin:12px 0 4px}
+dialog input[type=url]{width:100%;font:16px "Libre Franklin",sans-serif;padding:8px 10px;border:1px solid var(--rule);background:var(--bg);color:var(--ink)}
+dialog .hint{font-size:13px;color:var(--mut)}
+footer{font-size:12px;color:var(--mut);padding:24px 0 40px}
+@media(max-width:600px){.bar{position:static}.item{grid-template-columns:52px minmax(0,1fr);gap:2px 10px}.time{font-size:18px}.item h3{font-size:17px}}
+</style>
+</head>
+<body>
+<header class="wrap">
+  <div class="mast">
+    <h1>Nyhedsvagtens værktøjskasse</h1>
+    <div class="dateline">
+      <span class="live"><i class="dot" id="dot"></i><span id="status">Starter …</span></span>
+      <span id="countdown"></span>
+      <button class="btn ghost" id="refresh" type="button">Opdatér</button>
+      <button class="btn ghost" id="openSettings" type="button">Indstillinger</button>
+    </div>
+  </div>
+  <div class="dateline" style="margin-top:4px">Faxe · Sorø · Næstved · Vordingborg · Slagelse</div>
+</header>
+
+<div class="wrap"><div class="sources" id="sources"></div></div>
+
+<div class="bar"><div class="wrap">
+  <div class="row" id="srcChips"></div>
+  <div class="row" id="kChips"></div>
+  <div class="row">
+    <input type="search" id="q" placeholder="Søg i meldinger, fx Ringstedvej eller brand" aria-label="Søg">
+    <label class="tg"><input type="checkbox" id="onlyArea" checked> Kun mit område</label>
+    <label class="tg"><input type="checkbox" id="hideRoutine" checked> Skjul rutine</label>
+  </div>
+</div></div>
+
+<main class="wrap">
+  <div id="demoNote" class="notice" hidden>Du ser eksempeldata. Indsæt adressen på din Cloudflare Worker under <b>Indstillinger</b> for at få rigtige meldinger.</div>
+  <div id="list"></div>
+</main>
+
+<footer class="wrap">
+  Kilder: <a href="https://www.odin.dk/112puls/" rel="noopener">ODIN 112-puls, Beredskabsstyrelsen</a> ·
+  Politiets meldinger via Ritzau · <a href="https://trafikkort.vejdirektoratet.dk/" rel="noopener">Vejdirektoratet</a> ·
+  <a href="https://www.dr.dk/trafik" rel="noopener">DR P4 Trafik</a> · lokale medier. ODIN-data må kun bringes med tydelig kildeangivelse og link til odin.dk/112puls.
+</footer>
+
+<dialog id="settings">
+  <form method="dialog" id="settingsForm">
+    <h2>Indstillinger</h2>
+    <label for="workerUrl">Worker-adresse</label>
+    <input type="url" id="workerUrl" placeholder="https://nyhedsvagten.dit-navn.workers.dev">
+    <div class="hint">Tom = eksempeldata. Appen henter <code>/api/feed</code> fra denne adresse.</div>
+    <label for="interval">Opdateringsinterval</label>
+    <select id="interval" class="btn ghost">
+      <option value="30">30 sek.</option><option value="60">1 min.</option><option value="120">2 min.</option><option value="300">5 min.</option>
+    </select>
+    <div class="row" style="margin-top:16px;justify-content:flex-end">
+      <button class="btn ghost" value="cancel" type="submit">Annullér</button>
+      <button class="btn" value="save" type="submit" id="saveSettings">Gem</button>
+    </div>
+  </form>
+</dialog>
+
+<script>
+{
+const SOURCES = [
+  ['odin', 'ODIN 112'], ['politi', 'Politi'], ['vd', 'Vejdirektoratet'], ['dr', 'P4 Trafik'], ['medier', 'Lokale medier'],
+];
+const KOMMUNER = ['Faxe', 'Sorø', 'Næstved', 'Vordingborg', 'Slagelse'];
+const ROUTINE = /\b(ISL-?Forespørgsel|ISL-?Eftersyn|Eftersyn|Prøve|Forespørgsel|Elevator stop)\b/i;
+const SERIOUS = /(bygn\.?brand|brand i (bolig|lejlighed|hus|villa)|fastklemt|FUH|eksplosion|drukning|redning|dræbt|død|alvorligt? (kvæstet|tilskadekomm)|livsfarlig|skud|knivstik|gasudslip|stor brand|spærret|frontalt|væltet)/i;
+
+const store = {
+  get(k, d) { try { const v = localStorage.getItem('nvv.' + k); return v === null ? d : JSON.parse(v); } catch (_) { return d; } },
+  set(k, v) { try { localStorage.setItem('nvv.' + k, JSON.stringify(v)); } catch (_) {} },
+};
+
+const state = {
+  items: [], sources: [], updated: null,
+  srcOn: store.get('srcOn', Object.fromEntries(SOURCES.map(s => [s[0], true]))),
+  kOn: store.get('kOn', Object.fromEntries(KOMMUNER.map(k => [k, true]))),
+  seen: new Set(store.get('seen', [])),
+  firstLoad: true, nextAt: 0, timer: null,
+  cfg: store.get('cfg', { url: '', interval: 60 }),
+};
+
+const $ = id => document.getElementById(id);
+const escH = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const fmtTime = iso => iso ? new Date(iso).toLocaleTimeString('da-DK', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Copenhagen' }) : '–';
+const dayKey = iso => iso ? new Date(iso).toLocaleDateString('sv-SE', { timeZone: 'Europe/Copenhagen' }) : 'ukendt';
+function dayLabel(key) {
+  if (key === 'ukendt') return 'Uden tidspunkt';
+  const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Copenhagen' });
+  const y = new Date(Date.now() - 864e5).toLocaleDateString('sv-SE', { timeZone: 'Europe/Copenhagen' });
+  const d = new Date(key + 'T12:00:00').toLocaleDateString('da-DK', { weekday: 'long', day: 'numeric', month: 'long' });
+  return key === today ? 'I dag · ' + d : key === y ? 'I går · ' + d : d.charAt(0).toUpperCase() + d.slice(1);
+}
+function ago(iso) {
+  if (!iso) return '';
+  const m = Math.round((Date.now() - new Date(iso)) / 6e4);
+  if (m < 1) return 'lige nu'; if (m < 60) return m + ' min siden';
+  const h = Math.round(m / 60); return h < 24 ? h + ' t siden' : '';
+}
+
+function renderChips() {
+  $('srcChips').innerHTML = SOURCES.map(([k, l]) =>
+    `<button type="button" class="chip" data-src="${k}" aria-pressed="${!!state.srcOn[k]}">${l}</button>`).join('');
+  $('kChips').innerHTML = KOMMUNER.map(k =>
+    `<button type="button" class="chip k" data-k="${k}" aria-pressed="${!!state.kOn[k]}">${k}</button>`).join('');
+}
+
+function renderSources() {
+  const by = Object.fromEntries(state.sources.map(s => [s.key, s]));
+  $('sources').innerHTML = SOURCES.map(([k, l]) => {
+    const s = by[k];
+    if (!s) return `<span><i class="dot"></i>${l}</span>`;
+    const tip = (s.ok ? '' : 'Fejl: ' + s.errors.join('; ') + ' · ') + `${s.count} meldinger, ${s.local} lokale`;
+    return `<span title="${escH(tip)}"><i class="dot ${s.ok ? 'ok' : 'err'}" style="animation:none"></i>${l} <b>${s.local}</b>${s.ok ? '' : ' (fejl)'}</span>`;
+  }).join('');
+}
+
+function visible() {
+  const q = $('q').value.trim().toLowerCase();
+  const only = $('onlyArea').checked, hideR = $('hideRoutine').checked;
+  return state.items.filter(i => {
+    if (!state.srcOn[i.source]) return false;
+    if (only && !i.inArea) return false;
+    if (i.kommune && KOMMUNER.includes(i.kommune) && !state.kOn[i.kommune]) return false;
+    if (hideR && i.source === 'odin' && ROUTINE.test(i.title)) return false;
+    if (q && !(i.title + ' ' + i.text + ' ' + i.place + ' ' + (i.kommune || '')).toLowerCase().includes(q)) return false;
+    return true;
+  });
+}
+
+function render() {
+  const list = visible();
+  if (!list.length) {
+    $('list').innerHTML = `<div class="empty">${state.updated ? 'Ingen meldinger med de valgte filtre.' : 'Henter meldinger …'}</div>`;
+    return;
+  }
+  let html = '', lastDay = null;
+  for (const i of list) {
+    const dk = dayKey(i.time);
+    if (dk !== lastDay) { html += `<h2 class="day">${escH(dayLabel(dk))}</h2>`; lastDay = dk; }
+    const isNew = i._new;
+    const serious = SERIOUS.test(i.title + ' ' + i.text);
+    const long = (i.text || '').length > 220;
+    html += `<article class="item${isNew ? ' new' : ''}${serious ? ' alvor' : ''}${i.inArea ? '' : ' out'}" data-id="${escH(i.id)}">
+      <div class="time">${fmtTime(i.time)}<small>${escH(ago(i.time))}</small></div>
+      <div>
+        <div class="meta">
+          ${isNew ? '<span class="flag">NY</span>' : ''}
+          <span class="src ${escH(i.source)}">${escH(i.sourceLabel)}</span>
+          ${i.kommune ? `<span class="tagk">${escH(i.kommune)}</span>` : ''}
+          ${i.place && i.place !== i.kommune ? `<span>${escH(i.place)}</span>` : ''}
+          ${i.inArea ? '' : '<span>uden for området</span>'}
+        </div>
+        <h3>${escH(i.title)}</h3>
+        ${i.text ? `<p class="${long ? 'clamp' : ''}">${escH(i.text)}</p>` : ''}
+        <div class="acts">
+          ${long ? '<button type="button" data-act="more">Vis mere</button>' : ''}
+          <button type="button" data-act="copy">Kopiér notits</button>
+          ${i.url ? `<a href="${escH(i.url)}" target="_blank" rel="noopener">Kilde</a>` : ''}
+        </div>
+      </div>
+    </article>`;
+  }
+  $('list').innerHTML = html;
+}
+
+function setStatus(text, ok) {
+  $('status').textContent = text;
+  $('dot').className = 'dot ' + (ok === true ? 'ok' : ok === false ? 'err' : '');
+}
+
+async function load() {
+  setStatus('Henter …');
+  try {
+    let data;
+    if (state.cfg.url) {
+      const res = await fetch(state.cfg.url.replace(/\/+$/, '') + '/api/feed', { cache: 'no-store' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      data = await res.json();
+      $('demoNote').hidden = true;
+    } else {
+      data = demoData();
+      $('demoNote').hidden = false;
+    }
+    for (const i of data.items) i._new = !state.firstLoad && !state.seen.has(i.id);
+    // første indlæsning: markér meldinger fra de sidste 15 min som nye, hvis de ikke er set før
+    if (state.firstLoad) for (const i of data.items) if (!state.seen.has(i.id) && i.time && Date.now() - new Date(i.time) < 15 * 6e4) i._new = true;
+    data.items.forEach(i => state.seen.add(i.id));
+    store.set('seen', [...state.seen].slice(-1500));
+    state.items = data.items; state.sources = data.sources || []; state.updated = data.updated;
+    state.firstLoad = false;
+    setStatus('Opdateret ' + fmtTime(data.updated), true);
+  } catch (e) {
+    setStatus('Kunne ikke hente: ' + e.message, false);
+  }
+  renderSources(); render(); schedule();
+}
+
+function schedule() {
+  clearTimeout(state.timer);
+  state.nextAt = Date.now() + state.cfg.interval * 1000;
+  state.timer = setTimeout(load, state.cfg.interval * 1000);
+}
+setInterval(() => {
+  const s = Math.max(0, Math.round((state.nextAt - Date.now()) / 1000));
+  $('countdown').textContent = state.nextAt ? `Næste om ${s} s` : '';
+}, 1000);
+
+// ── events ──
+$('srcChips').addEventListener('click', e => {
+  const b = e.target.closest('[data-src]'); if (!b) return;
+  state.srcOn[b.dataset.src] = !state.srcOn[b.dataset.src]; store.set('srcOn', state.srcOn); renderChips(); render();
+});
+$('kChips').addEventListener('click', e => {
+  const b = e.target.closest('[data-k]'); if (!b) return;
+  state.kOn[b.dataset.k] = !state.kOn[b.dataset.k]; store.set('kOn', state.kOn); renderChips(); render();
+});
+['q', 'onlyArea', 'hideRoutine'].forEach(id => $(id).addEventListener('input', () => {
+  if (id !== 'q') store.set(id, $(id).checked); render();
+}));
+$('onlyArea').checked = store.get('onlyArea', true);
+$('hideRoutine').checked = store.get('hideRoutine', true);
+$('refresh').addEventListener('click', load);
+$('list').addEventListener('click', async e => {
+  const b = e.target.closest('[data-act]'); if (!b) return;
+  const art = b.closest('.item'); const it = state.items.find(x => x.id === art.dataset.id);
+  if (b.dataset.act === 'more') { art.querySelector('p').classList.toggle('clamp'); b.textContent = b.textContent === 'Vis mere' ? 'Vis mindre' : 'Vis mere'; }
+  if (b.dataset.act === 'copy' && it) {
+    const d = it.time ? new Date(it.time).toLocaleString('da-DK', { dateStyle: 'short', timeStyle: 'short', timeZone: 'Europe/Copenhagen' }) : '';
+    const txt = `${d} · ${it.sourceLabel}${it.kommune ? ' · ' + it.kommune : ''}${it.place && it.place !== it.kommune ? ' (' + it.place + ')' : ''}\n${it.title}${it.text ? '\n' + it.text : ''}${it.url ? '\nKilde: ' + it.url : ''}`;
+    try { await navigator.clipboard.writeText(txt); b.textContent = 'Kopieret ✓'; } catch (_) { b.textContent = 'Kunne ikke kopiere'; }
+    setTimeout(() => { b.textContent = 'Kopiér notits'; }, 1800);
+  }
+});
+document.addEventListener('visibilitychange', () => { if (!document.hidden && Date.now() > state.nextAt) load(); });
+
+$('openSettings').addEventListener('click', () => {
+  $('workerUrl').value = state.cfg.url; $('interval').value = String(state.cfg.interval);
+  $('settings').showModal();
+});
+$('settings').addEventListener('close', () => {
+  if ($('settings').returnValue !== 'save') return;
+  state.cfg = { url: $('workerUrl').value.trim(), interval: +$('interval').value };
+  store.set('cfg', state.cfg);
+  state.firstLoad = true; load();
+});
+
+// ── eksempeldata (vises kun uden worker) ──
+function demoData() {
+  const t = m => new Date(Date.now() - m * 6e4).toISOString();
+  const items = [
+    { id: 'd1', source: 'odin', sourceLabel: 'ODIN 112-puls', time: t(4), title: 'Bygn.brand-Villa/Rækkehus', text: 'Station: Næstved · Midt- og Sydsjællands Brand & Redning', url: 'https://www.odin.dk/112puls/', place: 'Næstved', kommune: 'Næstved', inArea: true },
+    { id: 'd2', source: 'politi', sourceLabel: 'Politi · Sydsjællands og Lolland-Falsters', time: t(11), title: 'Færdselsuheld på Ringstedvej ved Haslev', text: 'Politiet er til stede ved et færdselsuheld mellem to personbiler. Vejen er spærret i begge retninger, og trafikken omdirigeres.', url: 'https://politi.dk', place: 'Haslev', kommune: 'Faxe', inArea: true },
+    { id: 'd3', source: 'vd', sourceLabel: 'Vejdirektoratet', time: t(23), title: 'E20 Vestmotorvejen', text: 'Uheld mellem 37 Sorø og 38 Slagelse i retning mod Odense. Ét spor spærret.', url: 'https://trafikkort.vejdirektoratet.dk/', place: 'Sorø (3 km)', kommune: 'Sorø', inArea: true },
+    { id: 'd4', source: 'dr', sourceLabel: 'P4 Trafik', time: t(35), title: 'Sydmotorvejen ved Rønnede: Kø mod København efter uheld.', text: 'Sydmotorvejen ved Rønnede: Kø mod København efter uheld.', url: 'https://www.dr.dk/trafik', place: 'Rønnede', kommune: 'Faxe', inArea: true },
+    { id: 'd5', source: 'odin', sourceLabel: 'ODIN 112-puls', time: t(52), title: 'ISL-Forespørgsel', text: 'Station: Korsør · Slagelse Brand & Redning', url: 'https://www.odin.dk/112puls/', place: 'Korsør', kommune: 'Slagelse', inArea: true },
+    { id: 'd6', source: 'medier', sourceLabel: 'TV ØST', time: t(70), title: 'Container i brand ved skole i Vordingborg', text: 'Brandvæsenet rykkede ud til en containerbrand. Ingen personer kom til skade.', url: 'https://www.tvoest.dk', place: 'Vordingborg', kommune: 'Vordingborg', inArea: true },
+    { id: 'd7', source: 'politi', sourceLabel: 'Politi · Sydsjællands og Lolland-Falsters', time: t(95), title: 'Efterlysning: 80-årig savnet i Nykøbing F', text: 'Politiet efterlyser en 80-årig mand.', url: 'https://politi.dk', place: 'Nykøbing F', kommune: null, inArea: false },
+    { id: 'd8', source: 'vd', sourceLabel: 'Vejdirektoratet', time: t(60 * 26), title: 'Rute 59 Vordingborg', text: 'Vejarbejde, nedsat hastighed 50 km/t.', url: 'https://trafikkort.vejdirektoratet.dk/', place: 'Vordingborg', kommune: 'Vordingborg', inArea: true },
+  ];
+  return {
+    updated: new Date().toISOString(), items,
+    sources: SOURCES.map(([k, l]) => ({ key: k, label: l, count: items.filter(i => i.source === k).length, local: items.filter(i => i.source === k && i.inArea).length, ok: true, errors: [] })),
+  };
+}
+
+renderChips();
+load();
+}
+</script>
+</body>
+</html>

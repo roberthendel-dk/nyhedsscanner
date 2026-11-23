@@ -11,7 +11,7 @@
  * Ret kilder og byer i CONFIG herunder. Intet andet skal ændres.
  */
 
-const VERSION = '15';
+const VERSION = '16';
 
 const CONFIG = {
   // ODIN RSS pr. beredskab. "areaDefault" = hændelser regnes som lokale, medmindre stationen ligger uden for området.
@@ -715,6 +715,41 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     if (request.method === 'OPTIONS') return new Response(null, { headers: CORS });
+    if (url.pathname === '/api/debug-el') {
+      // Midlertidig testside: finder datakilden bag elnet-widgetten (strømafbrydelser)
+      const get = async (u, ms = 7000) => {
+        try {
+          const r = await fetch(u, { headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json, text/html, */*', 'Referer': 'https://widget.elnet.danskenergi.dk/' }, signal: AbortSignal.timeout(ms) });
+          return { status: r.status, type: r.headers.get('content-type'), text: await r.text() };
+        } catch (e) { return { error: String(e && e.message || e) }; }
+      };
+      const out = { version: VERSION };
+      const base = 'https://widget.elnet.danskenergi.dk/';
+      const page = await get(base);
+      out.page = { status: page.status, length: (page.text || '').length, error: page.error };
+      const scripts = [...(page.text || '').matchAll(/<script[^>]*src="([^"]+)"/gi)].map(m => new URL(m[1], base).href);
+      out.scripts = scripts;
+      const strs = new Set();
+      for (const s of scripts.slice(0, 6)) {
+        const js = await get(s, 9000);
+        for (const m of (js.text || '').matchAll(/["'`]((?:https?:)?\/\/[^"'`\s]{4,200}|\/api\/[A-Za-z0-9_\-./{}$]{1,120})["'`]/g)) {
+          if (/api|outage|interrupt|afbryd|elnet|greenpower|danskenergi/i.test(m[1]) && !/\.(png|svg|jpe?g|css|woff)/i.test(m[1])) strs.add(m[1]);
+        }
+      }
+      out.strings = [...strs].slice(0, 60);
+      out.tried = [];
+      const cands = new Set();
+      for (const s of out.strings) {
+        if (s.includes('${') || s.includes('{')) continue;
+        if (/^https?:\/\//.test(s)) cands.add(s);
+        else if (s.startsWith('/api/')) { cands.add('https://api.elnet.greenpowerdenmark.dk' + s); cands.add('https://api.elnet.danskenergi.dk' + s); }
+      }
+      for (const u of [...cands].slice(0, 12)) {
+        const r = await get(u, 5000);
+        out.tried.push({ url: u, status: r.status, type: r.type, error: r.error, start: (r.text || '').slice(0, 500) });
+      }
+      return new Response(JSON.stringify(out, null, 1), { headers: { ...CORS, 'Content-Type': 'application/json; charset=utf-8' } });
+    }
     if (url.pathname === '/api/feed') {
       let body;
       try { body = await buildFeed(ctx); }

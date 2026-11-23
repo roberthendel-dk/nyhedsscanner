@@ -35,7 +35,10 @@ h1 b{color:var(--red)}
 @media(prefers-reduced-motion:no-preference){.dot.ok{animation:pulse 2s infinite}}
 @keyframes pulse{50%{opacity:.35}}
 .sources{display:flex;gap:6px 16px;flex-wrap:wrap;font-size:13px;color:var(--mut);padding:8px 0;border-bottom:1px solid var(--rule)}
-.sources span{display:inline-flex;gap:5px;align-items:center;white-space:nowrap;cursor:help}
+.sources span,.srcbtn{display:inline-flex;gap:5px;align-items:center;white-space:nowrap}
+.srcbtn{font:inherit;color:inherit;background:none;border:0;padding:4px 0;cursor:pointer;min-height:32px}
+.srcbtn:focus-visible{outline:2px solid var(--red);outline-offset:2px}
+#srcInfo{font-size:14px;white-space:pre-line;overflow-wrap:anywhere}
 .bar{position:sticky;top:0;z-index:5;background:var(--bg);border-bottom:1px solid var(--rule);padding:10px 0}
 .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 .row+.row{margin-top:8px}
@@ -93,7 +96,7 @@ footer{font-size:12px;color:var(--mut);padding:24px 0 40px}
   <div class="dateline" style="margin-top:4px">Faxe · Sorø · Næstved · Vordingborg · Slagelse</div>
 </header>
 
-<div class="wrap"><div class="sources" id="sources"></div></div>
+<div class="wrap"><div class="sources" id="sources"></div><div id="srcInfo" class="notice" hidden></div></div>
 
 <div class="bar"><div class="wrap">
   <div class="row" id="srcChips"></div>
@@ -208,7 +211,7 @@ function renderSources() {
     const s = by[k];
     if (!s) return `<span><i class="dot"></i>${l}</span>`;
     const tip = (s.ok ? '' : 'Fejl: ' + s.errors.join('; ') + ' · ') + `${s.count} meldinger, ${s.local} lokale`;
-    return `<span title="${escH(tip)}"><i class="dot ${s.ok ? 'ok' : 'err'}" style="animation:none"></i>${l} <b>${s.local}</b>${s.ok ? '' : ' (fejl)'}</span>`;
+    return `<button type="button" class="srcbtn" data-key="${k}" title="${escH(tip)}"><i class="dot ${s.ok ? 'ok' : 'err'}" style="animation:none"></i>${l} <b>${s.local}</b>${s.ok ? '' : ' (fejl – klik)'}</button>`;
   }).join('');
 }
 
@@ -326,6 +329,17 @@ setInterval(() => {
   const s = Math.max(0, Math.round((state.nextAt - Date.now()) / 1000));
   $('countdown').textContent = state.nextAt ? `Næste om ${s} s` : '';
 }, 1000);
+
+// ── kildestatus: klik for detaljer ──
+$('sources').addEventListener('click', e => {
+  const b = e.target.closest('.srcbtn'); if (!b) return;
+  const s = state.sources.find(x => x.key === b.dataset.key); const box = $('srcInfo');
+  if (!s || (!box.hidden && box.dataset.key === s.key)) { box.hidden = true; return; }
+  box.dataset.key = s.key;
+  box.textContent = `${s.label}: ${s.count} meldinger, heraf ${s.local} lokale (hentet på ${s.ms} ms).` +
+    (s.errors && s.errors.length ? '\nFejl:\n• ' + s.errors.join('\n• ') : '\nIngen fejl.');
+  box.hidden = false;
+});
 
 // ── events ──
 $('srcChips').addEventListener('click', e => {

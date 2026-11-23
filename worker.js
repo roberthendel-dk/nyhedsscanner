@@ -11,7 +11,7 @@
  * Ret kilder og byer i CONFIG herunder. Intet andet skal ændres.
  */
 
-const VERSION = '16';
+const VERSION = '17';
 
 const CONFIG = {
   // ODIN RSS pr. beredskab. "areaDefault" = hændelser regnes som lokale, medmindre stationen ligger uden for området.
@@ -78,6 +78,20 @@ const CONFIG = {
   // Sund & Bælt (Storebæltsbroen): pressemeddelelser via Ritzau – kun Storebælt, ikke Øresund/Femern
   storebaelt: {
     rss: ['https://via.ritzau.dk/rss/releases/latest?publisherId=13559443', 'https://via.ritzau.dk/rss/short-messages/latest?publisherId=13559443'],
+  },
+  // Strømafbrydelser fra elnetselskabernes fælles platform (Green Power Denmark) – Cerius m.fl.
+  el: {
+    url: 'https://api.elnet.greenpowerdenmark.dk/api/incidents?showType=2&supplierId=0',
+    maxKm: 10,
+    hoursAhead: 24, // varslede afbrydelser vises, når de starter inden for så mange timer
+    // Postnumre i de fem kommuner (bruges hvis koordinater mangler)
+    zip: {
+      Slagelse: ['4200','4220','4230','4241','4242','4243','4261','4291'],
+      Sorø: ['4180','4293','4295','4173'],
+      Næstved: ['4160','4171','4250','4262','4700','4684','4733','4736'],
+      Faxe: ['4640','4653','4654','4683','4690'],
+      Vordingborg: ['4720','4735','4750','4760','4771','4772','4773','4780','4791','4792','4793'],
+    },
   },
   // Lokale medier (RSS). Tilføj/fjern frit. Status vises i appen, så du kan se om et feed virker.
   // Kun artikler om hændelser (brand, uheld, politi osv.) fra medierne. Sæt til false for at få alle lokale artikler.
@@ -655,6 +669,53 @@ async function srcStorebaelt(ctx) {
   return { items, errors };
 }
 
+/** Strømafbrydelser: aktive og snarligt varslede afbrydelser i området. */
+async function srcEl(ctx) {
+  const items = [], errors = [];
+  const cfg = CONFIG.el;
+  // tider uden tidszone er dansk lokal tid
+  const local = s => { if (!s) return null; const m = String(s).match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/); return m ? danishLocalToIso(+m[1], +m[2], +m[3], +m[4], +m[5], 0) : parseDate(s); };
+  const fmt = iso => new Date(iso).toLocaleString('da-DK', { timeZone: 'Europe/Copenhagen', weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  try {
+    const data = JSON.parse(await fetchText(cfg.url, ctx));
+    const now = Date.now();
+    for (const r of (Array.isArray(data) ? data : (data.value || data.items || []))) {
+      if (r.incidentStatusId != null && r.incidentStatusId !== 1) continue; // kun aktive
+      const start = local(r.startDate), end = local(r.endDate), expected = local(r.expectedDowntime);
+      if (start && Date.parse(start) > now + cfg.hoursAhead * 36e5) continue;
+      if (end && Date.parse(end) < now) continue;
+      let place = '', kommune = null, inArea = false;
+      if (r.centerLat && r.centerLng) {
+        const n = nearestPlace(+r.centerLat, +r.centerLng);
+        if (n && n.d <= cfg.maxKm) { place = n.p[0]; kommune = n.p[1]; inArea = !!n.p[1]; }
+      }
+      const zips = String(r.zipcodes || '').split(/[,; ]+/).filter(Boolean);
+      if (!inArea) {
+        const k = Object.keys(cfg.zip).find(k => zips.some(z => cfg.zip[k].includes(z)));
+        if (k) { inArea = true; kommune = k; place = place || 'postnr. ' + zips.join(', '); }
+      }
+      if (!inArea) { const pm = matchPlace(r.title || ''); if (pm && pm.inArea) { inArea = true; place = pm.place; kommune = pm.kommune; } }
+      if (!inArea) continue; // resten af landet springes over
+      const n = +r.effectedCustomers || 0;
+      const title = (r.title || 'Strømafbrydelse').trim() + (n ? ` – ${n.toLocaleString('da-DK')} kunder` : '');
+      const text = [
+        [r.incidentType, r.supplierName].filter(Boolean).join(' · '),
+        start && 'Start: ' + fmt(start), (end || expected) && (end ? 'Slut: ' : 'Forventet slut: ') + fmt(end || expected),
+        zips.length && 'Postnr.: ' + zips.join(', '),
+        r.cause && stripHtml(r.cause), r.comment && stripHtml(r.comment),
+      ].filter(Boolean).join('\n');
+      const web = r.supplierWeb ? (/^https?:/.test(r.supplierWeb) ? r.supplierWeb : 'https://' + r.supplierWeb.replace(/^\/+/, '')) : '';
+      items.push({
+        id: 'el-' + (r.id || hash(title + start)), source: 'el', sourceLabel: 'Strømafbrydelse',
+        time: start || local(r.created), until: end || null, title, text: text.slice(0, 1200),
+        url: /cerius/i.test(r.supplierName || '') ? 'https://cerius.dk/stroemafbrydelse/' : (web || 'https://elnet.dk/'),
+        place, kommune, lat: +r.centerLat || null, lon: +r.centerLng || null, inArea, category: 'forsyning',
+      });
+    }
+  } catch (e) { errors.push(e.message); }
+  return { items, errors };
+}
+
 // ───────────────────────── handler ─────────────────────────
 
 const CORS = {
@@ -671,6 +732,7 @@ async function buildFeed(ctx) {
     ['dsb', 'DSB', () => srcDsb(ctx)],
     ['lokaltog', 'Lokaltog', () => srcLokaltog(ctx)],
     ['storebaelt', 'Sund & Bælt', () => srcStorebaelt(ctx)],
+    ['el', 'Strøm', () => srcEl(ctx)],
     ['dmi', 'DMI', async () => {
       const parts = await Promise.all([srcDmi(ctx), srcDmiObs(ctx), srcDmiLightning(ctx), srcDmiSea(ctx)]);
       return { items: parts.flatMap(p => p.items), errors: parts.flatMap(p => p.errors) };
@@ -715,41 +777,6 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     if (request.method === 'OPTIONS') return new Response(null, { headers: CORS });
-    if (url.pathname === '/api/debug-el') {
-      // Midlertidig testside: finder datakilden bag elnet-widgetten (strømafbrydelser)
-      const get = async (u, ms = 7000) => {
-        try {
-          const r = await fetch(u, { headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json, text/html, */*', 'Referer': 'https://widget.elnet.danskenergi.dk/' }, signal: AbortSignal.timeout(ms) });
-          return { status: r.status, type: r.headers.get('content-type'), text: await r.text() };
-        } catch (e) { return { error: String(e && e.message || e) }; }
-      };
-      const out = { version: VERSION };
-      const base = 'https://widget.elnet.danskenergi.dk/';
-      const page = await get(base);
-      out.page = { status: page.status, length: (page.text || '').length, error: page.error };
-      const scripts = [...(page.text || '').matchAll(/<script[^>]*src="([^"]+)"/gi)].map(m => new URL(m[1], base).href);
-      out.scripts = scripts;
-      const strs = new Set();
-      for (const s of scripts.slice(0, 6)) {
-        const js = await get(s, 9000);
-        for (const m of (js.text || '').matchAll(/["'`]((?:https?:)?\/\/[^"'`\s]{4,200}|\/api\/[A-Za-z0-9_\-./{}$]{1,120})["'`]/g)) {
-          if (/api|outage|interrupt|afbryd|elnet|greenpower|danskenergi/i.test(m[1]) && !/\.(png|svg|jpe?g|css|woff)/i.test(m[1])) strs.add(m[1]);
-        }
-      }
-      out.strings = [...strs].slice(0, 60);
-      out.tried = [];
-      const cands = new Set();
-      for (const s of out.strings) {
-        if (s.includes('${') || s.includes('{')) continue;
-        if (/^https?:\/\//.test(s)) cands.add(s);
-        else if (s.startsWith('/api/')) { cands.add('https://api.elnet.greenpowerdenmark.dk' + s); cands.add('https://api.elnet.danskenergi.dk' + s); }
-      }
-      for (const u of [...cands].slice(0, 12)) {
-        const r = await get(u, 5000);
-        out.tried.push({ url: u, status: r.status, type: r.type, error: r.error, start: (r.text || '').slice(0, 500) });
-      }
-      return new Response(JSON.stringify(out, null, 1), { headers: { ...CORS, 'Content-Type': 'application/json; charset=utf-8' } });
-    }
     if (url.pathname === '/api/feed') {
       let body;
       try { body = await buildFeed(ctx); }
@@ -763,4 +790,4 @@ export default {
 };
 
 // Eksporter til test i Node (ignoreres af Cloudflare)
-export const _test = { parseRss, parseDate, matchPlace, nearestPlace, stripHtml, srcOdin, srcVd, srcDsb, srcLokaltog, srcStorebaelt, srcDmi, srcDmiObs, srcDmiLightning, srcDmiSea, parseDaDate, srcRss, buildFeed, CONFIG };
+export const _test = { parseRss, parseDate, matchPlace, nearestPlace, stripHtml, srcOdin, srcVd, srcDsb, srcLokaltog, srcStorebaelt, srcEl, srcDmi, srcDmiObs, srcDmiLightning, srcDmiSea, parseDaDate, srcRss, buildFeed, CONFIG };

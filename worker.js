@@ -11,7 +11,7 @@
  * Ret kilder og byer i CONFIG herunder. Intet andet skal ændres.
  */
 
-const VERSION = '22';
+const VERSION = '23';
 
 const CONFIG = {
   // ODIN RSS pr. beredskab. "areaDefault" = hændelser regnes som lokale, medmindre stationen ligger uden for området.
@@ -23,8 +23,6 @@ const CONFIG = {
   // Politiets korte meldinger (POLITI | UPDATE) via Ritzau. Alle fem kommuner hører under Sydsjællands og Lolland-Falsters Politi.
   politi: [
     { url: 'https://via.ritzau.dk/rss/short-messages/latest?publisherId=90594', label: 'Sydsjællands og Lolland-Falsters Politi', areaDefault: true }, // uden stedsangivelse = lokal
-    // Pressemeddelelser – her udkommer bl.a. "Uddrag af døgnrapporten"
-    { url: 'https://via.ritzau.dk/rss/releases/latest?publisherId=90594', label: 'Sydsjællands og Lolland-Falsters Politi', areaDefault: true },
   ],
   // Vejdirektoratets offentlige data bag trafikkort.vejdirektoratet.dk
   vd: {
@@ -95,6 +93,8 @@ const CONFIG = {
   },
   // Agersø-Omø-færgerne: ændringer i sejlplanen
   faerger: { url: 'https://aofaerger.slagelse.dk/da/sejlplan/aendringer-i-sejlplan/', daysAhead: 3 },
+  // Politiets RSS har ingen brødtekst – den hentes fra selve meldingen for de nyeste (koster én forespørgsel pr. melding)
+  politiBody: { maxItems: 6, maxHours: 48 },
   // Lokale medier (RSS). Tilføj/fjern frit. Status vises i appen, så du kan se om et feed virker.
   // Kun artikler om hændelser (brand, uheld, politi osv.) fra medierne. Sæt til false for at få alle lokale artikler.
   mediaOnlyIncidents: true,
@@ -339,6 +339,22 @@ async function srcRss(list, source, sourceLabelFn, category, ctx) {
       }
     } catch (e) { errors.push(f.label + ': ' + e.message); }
   }));
+  if (source === 'politi' && CONFIG.politiBody) {
+    const minT = Date.now() - CONFIG.politiBody.maxHours * 36e5;
+    const recent = items.filter(i => !i.text && i.url && i.time && Date.parse(i.time) >= minT)
+      .sort((a, b) => b.time.localeCompare(a.time)).slice(0, CONFIG.politiBody.maxItems);
+    await Promise.all(recent.map(async i => {
+      try {
+        const body = await politiBody(i.url, i.title);
+        if (!body) return;
+        i.text = body.slice(0, 1200);
+        if (!i.kommune) { // stedet står ofte først i brødteksten
+          const pm = matchPlace(body);
+          if (pm) { i.place = pm.place; i.kommune = pm.kommune; i.lat = pm.lat; i.lon = pm.lon; i.inArea = pm.inArea; }
+        }
+      } catch (_) { /* behold meldingen uden brødtekst */ }
+    }));
+  }
   return { items, errors };
 }
 
@@ -747,6 +763,27 @@ async function srcFaerger(ctx) {
     flush();
   } catch (e) { errors.push(e.message); }
   return { items, errors };
+}
+
+/** Henter brødteksten til en politimelding fra Ritzaus side (tekst efter overskriften, før "Abonner på ..."). */
+async function politiBody(link, title) {
+  const html = await fetchText(link.split('#')[0]);
+  const clean = html.replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<style[\s\S]*?<\/style>/gi, ' ').replace(/<head[\s\S]*?<\/head>/i, ' ');
+  const lines = decodeEntities(clean.replace(/<br\s*\/?>/gi, '\n').replace(/<\/(p|div|h\d|li)>/gi, '\n').replace(/<[^>]+>/g, ' '))
+    .split('\n').map(s => s.replace(/\s+/g, ' ').trim()).filter(Boolean);
+  const t = (title || '').trim().toLowerCase();
+  let a = lines.findIndex(l => l.toLowerCase() === t);
+  if (a < 0) a = lines.findIndex(l => t && l.toLowerCase().includes(t.slice(0, 40)));
+  if (a < 0) return '';
+  const out = [];
+  for (const l of lines.slice(a + 1)) {
+    if (/^abonner på|^flere meddelelser|^følg pressemeddelelser|^kontakter?$/i.test(l)) break;
+    if (/^\d{1,2}\.\d{1,2}\.\d{4} \d{1,2}:\d{2}/.test(l) || /\| (myndighedsmeddelelse|pressemeddelelse)$/i.test(l) || /politi$/i.test(l) && l.length < 60 && !out.length) continue; // dato- og afsenderlinje
+    if (l.toLowerCase() === t) continue;
+    out.push(l);
+    if (out.join(' ').length > 1200) break;
+  }
+  return out.join('\n').trim();
 }
 
 // ───────────────────────── handler ─────────────────────────

@@ -57,6 +57,7 @@ label.tg input{width:18px;height:18px;accent-color:var(--red)}
 .meta{font-size:13px;color:var(--mut);display:flex;gap:4px 10px;flex-wrap:wrap;align-items:center}
 .src{font-weight:800;color:var(--ink)}
 .src.odin{color:var(--red)}
+.ico{font-size:1.15em;margin-right:5px;text-decoration:none;display:inline-block}
 .tagk{border:1px solid var(--rule);padding:0 6px;border-radius:2px;white-space:nowrap}
 .flag{color:var(--bg);background:var(--red);font-weight:800;font-size:11px;padding:1px 5px;border-radius:2px}
 .item h3{font:700 19px/1.25 "Source Serif 4",Georgia,serif;margin:3px 0 2px}
@@ -194,7 +195,7 @@ function dedupe(items) {
 
 function renderChips() {
   $('srcChips').innerHTML = SOURCES.map(([k, l]) =>
-    `<button type="button" class="chip" data-src="${k}" aria-pressed="${!!state.srcOn[k]}">${l}</button>`).join('');
+    `<button type="button" class="chip" data-src="${k}" aria-pressed="${!!state.srcOn[k]}">${icon(k)}${l}</button>`).join('');
   $('kChips').innerHTML = KOMMUNER.map(k =>
     `<button type="button" class="chip k" data-k="${k}" aria-pressed="${!!state.kOn[k]}">${k}</button>`).join('');
 }
@@ -238,6 +239,10 @@ function isSlagelseBR(i) {
   return i.kommune === 'Slagelse' || /Slagelse Brand/i.test(i.text || '');
 }
 
+// Ikoner foran kilden
+const ICON = { politi: '👮', odin: '🚒' };
+const icon = s => ICON[s] ? `<span class="ico" aria-hidden="true">${ICON[s]}</span>` : '';
+
 function render() {
   const list = visible();
   if (!list.length) {
@@ -256,7 +261,7 @@ function render() {
       <div>
         <div class="meta">
           ${isNew ? '<span class="flag">NY</span>' : ''}
-          <span class="src ${escH(i.source)}">${escH(i.sourceLabel)}</span>
+          <span class="src ${escH(i.source)}">${icon(i.source)}${escH(i.sourceLabel)}</span>
           ${i.kommune ? `<span class="tagk">${escH(i.kommune)}</span>` : ''}
           ${i.place && i.place !== i.kommune ? `<span>${escH(i.place)}</span>` : ''}
           ${i.inArea ? '' : '<span>uden for området</span>'}

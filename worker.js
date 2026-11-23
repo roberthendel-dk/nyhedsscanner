@@ -11,7 +11,7 @@
  * Ret kilder og byer i CONFIG herunder. Intet andet skal ændres.
  */
 
-const VERSION = '28';
+const VERSION = '29';
 
 const CONFIG = {
   // ODIN RSS pr. beredskab. "areaDefault" = hændelser regnes som lokale, medmindre stationen ligger uden for området.
@@ -365,7 +365,14 @@ async function srcRss(list, source, sourceLabelFn, category, ctx) {
   }
   if (list.some(f => f.alwaysShow)) { // politikredsens meldinger vises altid, undtagen de fravalgte steder
     const ex = new RegExp('(?<![\\p{L}])(' + (CONFIG.politiExclude || []).map(esc).join('|') + ')', 'iu');
-    items.forEach(i => { i.inArea = !(CONFIG.politiExclude || []).length || !ex.test(i.title + ' ' + (i.text || '')); });
+    items.forEach(i => {
+      // Retten i Nykøbing Falster er ikke hændelsens sted – fjern den, før der tjekkes
+      const txt = (i.title + ' ' + (i.text || '')).replace(/retten\s+i\s+nykøbing\s+(f\.?|falster)/gi, ' ');
+      // Nævner meldingen en by i området, vises den altid
+      const local = PLACE_RX.some(({ p, rx }) => p[1] && rx.test(txt)) || KOMMUNE_RX.some(({ rx }) => rx.test(txt));
+      if (local && !i.kommune) { const pm = matchPlace(txt); if (pm && pm.inArea) { i.kommune = pm.kommune; i.place = pm.place; } }
+      i.inArea = local || !(CONFIG.politiExclude || []).length || !ex.test(txt);
+    });
   }
   return { items, errors };
 }

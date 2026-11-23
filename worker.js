@@ -11,7 +11,7 @@
  * Ret kilder og byer i CONFIG herunder. Intet andet skal ændres.
  */
 
-const VERSION = '27';
+const VERSION = '28';
 
 const CONFIG = {
   // ODIN RSS pr. beredskab. "areaDefault" = hændelser regnes som lokale, medmindre stationen ligger uden for området.
@@ -96,7 +96,7 @@ const CONFIG = {
   // Politiets RSS har ingen brødtekst – den hentes fra selve meldingen for de nyeste (koster én forespørgsel pr. melding)
   politiBody: { maxItems: 6, maxHours: 48 },
   // Politimeldinger vises altid – undtagen når de nævner et af disse steder (ordet må gerne fortsætte, fx Rødbyhavn, Guldborgsund)
-  politiExclude: ['Nakskov', 'Gedser', 'Guldborg', 'Rødby'],
+  politiExclude: ['Nakskov', 'Gedser', 'Guldborg', 'Rødby', 'Nykøbing F', 'Nyk. F'],
   // Lokale medier (RSS). Tilføj/fjern frit. Status vises i appen, så du kan se om et feed virker.
   // Kun artikler om hændelser (brand, uheld, politi osv.) fra medierne. Sæt til false for at få alle lokale artikler.
   mediaOnlyIncidents: true,

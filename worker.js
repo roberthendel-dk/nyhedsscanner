@@ -11,7 +11,7 @@
  * Ret kilder og byer i CONFIG herunder. Intet andet skal ændres.
  */
 
-const VERSION = '11';
+const VERSION = '12';
 
 const CONFIG = {
   // ODIN RSS pr. beredskab. "areaDefault" = hændelser regnes som lokale, medmindre stationen ligger uden for området.
@@ -22,7 +22,7 @@ const CONFIG = {
   ],
   // Politiets korte meldinger (POLITI | UPDATE) via Ritzau. Alle fem kommuner hører under Sydsjællands og Lolland-Falsters Politi.
   politi: [
-    { url: 'https://via.ritzau.dk/rss/short-messages/latest?publisherId=90594', label: 'Sydsjællands og Lolland-Falsters Politi', areaDefault: false },
+    { url: 'https://via.ritzau.dk/rss/short-messages/latest?publisherId=90594', label: 'Sydsjællands og Lolland-Falsters Politi', areaDefault: true }, // uden stedsangivelse = lokal
   ],
   // Vejdirektoratets offentlige data bag trafikkort.vejdirektoratet.dk
   vd: {
@@ -97,6 +97,12 @@ const PLACES = [
   ['Ringsted', null, 55.442, 11.790], ['Køge', null, 55.457, 12.182], ['Holbæk', null, 55.717, 11.713],
   ['Kalundborg', null, 55.681, 11.089], ['Nykøbing F', null, 54.766, 11.873], ['Stevns', null, 55.330, 12.380],
   ['Store Heddinge', null, 55.311, 12.389], ['Nyborg', null, 55.312, 10.790],
+  // Lolland-Falster (samme politikreds, men uden for området)
+  ['Lolland', null, 54.770, 11.500], ['Falster', null, 54.800, 11.950], ['Guldborgsund', null, 54.770, 11.870],
+  ['Nyk. F', null, 54.766, 11.873], ['Nykøbing Falster', null, 54.766, 11.873], ['Nakskov', null, 54.831, 11.136],
+  ['Maribo', null, 54.776, 11.500], ['Sakskøbing', null, 54.799, 11.645], ['Rødby', null, 54.695, 11.390],
+  ['Nysted', null, 54.664, 11.736], ['Stubbekøbing', null, 54.887, 12.041], ['Gedser', null, 54.575, 11.928],
+  ['Marielyst', null, 54.680, 11.960], ['Nørre Alslev', null, 54.897, 11.885], ['Holeby', null, 54.710, 11.460],
 ];
 // Ringsted, Jystrup og Lundby-rettelse: Jystrup er Ringsted → uden for. Lundby (Vordingborg) ok.
 PLACES.forEach(p => { if (p[1] === 'Ringsted') p[1] = null; });

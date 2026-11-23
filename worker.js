@@ -11,7 +11,7 @@
  * Ret kilder og byer i CONFIG herunder. Intet andet skal ændres.
  */
 
-const VERSION = '26';
+const VERSION = '27';
 
 const CONFIG = {
   // ODIN RSS pr. beredskab. "areaDefault" = hændelser regnes som lokale, medmindre stationen ligger uden for området.
@@ -95,6 +95,8 @@ const CONFIG = {
   faerger: { url: 'https://aofaerger.slagelse.dk/da/sejlplan/aendringer-i-sejlplan/', daysAhead: 3 },
   // Politiets RSS har ingen brødtekst – den hentes fra selve meldingen for de nyeste (koster én forespørgsel pr. melding)
   politiBody: { maxItems: 6, maxHours: 48 },
+  // Politimeldinger vises altid – undtagen når de nævner et af disse steder (ordet må gerne fortsætte, fx Rødbyhavn, Guldborgsund)
+  politiExclude: ['Nakskov', 'Gedser', 'Guldborg', 'Rødby'],
   // Lokale medier (RSS). Tilføj/fjern frit. Status vises i appen, så du kan se om et feed virker.
   // Kun artikler om hændelser (brand, uheld, politi osv.) fra medierne. Sæt til false for at få alle lokale artikler.
   mediaOnlyIncidents: true,
@@ -361,7 +363,10 @@ async function srcRss(list, source, sourceLabelFn, category, ctx) {
       } catch (_) { /* behold meldingen uden brødtekst */ }
     }));
   }
-  if (list.some(f => f.alwaysShow)) items.forEach(i => { i.inArea = true; }); // politikredsens meldinger vises altid
+  if (list.some(f => f.alwaysShow)) { // politikredsens meldinger vises altid, undtagen de fravalgte steder
+    const ex = new RegExp('(?<![\\p{L}])(' + (CONFIG.politiExclude || []).map(esc).join('|') + ')', 'iu');
+    items.forEach(i => { i.inArea = !(CONFIG.politiExclude || []).length || !ex.test(i.title + ' ' + (i.text || '')); });
+  }
   return { items, errors };
 }
 

@@ -11,7 +11,7 @@
  * Ret kilder og byer i CONFIG herunder. Intet andet skal ændres.
  */
 
-const VERSION = '25';
+const VERSION = '26';
 
 const CONFIG = {
   // ODIN RSS pr. beredskab. "areaDefault" = hændelser regnes som lokale, medmindre stationen ligger uden for området.
@@ -22,7 +22,7 @@ const CONFIG = {
   ],
   // Politiets korte meldinger (POLITI | UPDATE) via Ritzau. Alle fem kommuner hører under Sydsjællands og Lolland-Falsters Politi.
   politi: [
-    { url: 'https://via.ritzau.dk/rss/short-messages/latest?publisherId=90594', label: 'Sydsjællands og Lolland-Falsters Politi', areaDefault: true }, // uden stedsangivelse = lokal
+    { url: 'https://via.ritzau.dk/rss/short-messages/latest?publisherId=90594', label: 'Sydsjællands og Lolland-Falsters Politi', areaDefault: true, alwaysShow: true }, // vises altid, uanset sted
   ],
   // Vejdirektoratets offentlige data bag trafikkort.vejdirektoratet.dk
   vd: {
@@ -361,6 +361,7 @@ async function srcRss(list, source, sourceLabelFn, category, ctx) {
       } catch (_) { /* behold meldingen uden brødtekst */ }
     }));
   }
+  if (list.some(f => f.alwaysShow)) items.forEach(i => { i.inArea = true; }); // politikredsens meldinger vises altid
   return { items, errors };
 }
 

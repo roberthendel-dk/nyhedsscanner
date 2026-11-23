@@ -11,7 +11,7 @@
  * Ret kilder og byer i CONFIG herunder. Intet andet skal ændres.
  */
 
-const VERSION = '24';
+const VERSION = '25';
 
 const CONFIG = {
   // ODIN RSS pr. beredskab. "areaDefault" = hændelser regnes som lokale, medmindre stationen ligger uden for området.
@@ -351,10 +351,10 @@ async function srcRss(list, source, sourceLabelFn, category, ctx) {
         if (!i.kommune) { // stedet står ofte først i brødteksten
           // Fjern politikredsens navn og "Sydsjælland og Lolland-Falster" – det er afsender, ikke sted
           const clean = body.replace(/sydsjællands? og lolland-falsters? politi/gi, ' ').replace(/(sydsjælland|midt- og vestsjælland)\s+og\s+lolland-falster/gi, ' ')
-            .replace(/lolland-falster/gi, ' ').replace(/politikreds\w*/gi, ' ');
+            .replace(/lolland-falster/gi, ' ').replace(/politikreds\w*/gi, ' ')
+            .replace(/(?<![\p{L}])(lolland|falster|guldborgsund)(?![\p{L}])/giu, ' '); // regionsord afgør ikke stedet
           const pm = matchPlace(clean);
-          // Kun en konkret by flytter meldingen ud af området; regionsord som Lolland/Falster gør ikke
-          if (pm && (pm.inArea || !/^(lolland|falster|guldborgsund)$/i.test(pm.place))) {
+          if (pm) {
             i.place = pm.place; i.kommune = pm.kommune; i.lat = pm.lat; i.lon = pm.lon; i.inArea = pm.inArea;
           }
         }
@@ -783,7 +783,7 @@ async function politiBody(link, title) {
   if (a < 0) return '';
   const out = [];
   for (const l of lines.slice(a + 1)) {
-    if (/^abonner på|^flere meddelelser|^følg pressemeddelelser|^kontakter?$/i.test(l)) break;
+    if (/^abonner\b|^flere meddelelser|^følg pressemeddelelser|^kontakter?$/i.test(l)) break;
     if (/^\d{1,2}\.\d{1,2}\.\d{4} \d{1,2}:\d{2}/.test(l) || /\| (myndighedsmeddelelse|pressemeddelelse)$/i.test(l) || /politi$/i.test(l) && l.length < 60 && !out.length) continue; // dato- og afsenderlinje
     if (l.toLowerCase() === t) continue;
     out.push(l);

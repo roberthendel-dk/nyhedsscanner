@@ -11,7 +11,7 @@
  * Ret kilder og byer i CONFIG herunder. Intet andet skal ændres.
  */
 
-const VERSION = '14';
+const VERSION = '15';
 
 const CONFIG = {
   // ODIN RSS pr. beredskab. "areaDefault" = hændelser regnes som lokale, medmindre stationen ligger uden for området.
@@ -74,6 +74,10 @@ const CONFIG = {
     url: 'https://opendataapi.dmi.dk/v2/oceanObs/collections/observation/items',
     bbox: '11.0,54.9,12.6,55.6', hours: 6, maxKm: 12,
     high: 90, low: -80, // cm i forhold til normal (DVR90)
+  },
+  // Sund & Bælt (Storebæltsbroen): pressemeddelelser via Ritzau – kun Storebælt, ikke Øresund/Femern
+  storebaelt: {
+    rss: ['https://via.ritzau.dk/rss/releases/latest?publisherId=13559443', 'https://via.ritzau.dk/rss/short-messages/latest?publisherId=13559443'],
   },
   // Lokale medier (RSS). Tilføj/fjern frit. Status vises i appen, så du kan se om et feed virker.
   // Kun artikler om hændelser (brand, uheld, politi osv.) fra medierne. Sæt til false for at få alle lokale artikler.
@@ -632,6 +636,25 @@ async function srcDmiSea(ctx) {
   return { items, errors };
 }
 
+/** Sund & Bælt: meddelelser om Storebæltsbroen. */
+async function srcStorebaelt(ctx) {
+  const items = [], errors = [];
+  await Promise.all(CONFIG.storebaelt.rss.map(async u => {
+    try {
+      for (const it of parseRss(await fetchText(u, ctx))) {
+        const full = it.title + ' ' + it.description;
+        if (!/storebælt|korsør|halsskov|sprogø|vestbro|østbro/i.test(full)) continue; // Øresund, Femern m.m. springes over
+        items.push({
+          id: 'storebaelt-' + hash(((it.link || it.guid || it.title) + '').split('#')[0]), source: 'storebaelt', sourceLabel: 'Sund & Bælt',
+          time: parseDate(it.pubDate), title: it.title, text: it.description.slice(0, 1200), url: it.link,
+          place: 'Storebæltsbroen', kommune: 'Slagelse', lat: 55.338, lon: 11.05, inArea: true, category: 'trafik',
+        });
+      }
+    } catch (e) { errors.push(e.message); }
+  }));
+  return { items, errors };
+}
+
 // ───────────────────────── handler ─────────────────────────
 
 const CORS = {
@@ -647,6 +670,7 @@ async function buildFeed(ctx) {
     ['vd', 'Vejdirektoratet', () => srcVd(ctx)],
     ['dsb', 'DSB', () => srcDsb(ctx)],
     ['lokaltog', 'Lokaltog', () => srcLokaltog(ctx)],
+    ['storebaelt', 'Sund & Bælt', () => srcStorebaelt(ctx)],
     ['dmi', 'DMI', async () => {
       const parts = await Promise.all([srcDmi(ctx), srcDmiObs(ctx), srcDmiLightning(ctx), srcDmiSea(ctx)]);
       return { items: parts.flatMap(p => p.items), errors: parts.flatMap(p => p.errors) };
@@ -704,4 +728,4 @@ export default {
 };
 
 // Eksporter til test i Node (ignoreres af Cloudflare)
-export const _test = { parseRss, parseDate, matchPlace, nearestPlace, stripHtml, srcOdin, srcVd, srcDsb, srcLokaltog, srcDmi, srcDmiObs, srcDmiLightning, srcDmiSea, parseDaDate, srcRss, buildFeed, CONFIG };
+export const _test = { parseRss, parseDate, matchPlace, nearestPlace, stripHtml, srcOdin, srcVd, srcDsb, srcLokaltog, srcStorebaelt, srcDmi, srcDmiObs, srcDmiLightning, srcDmiSea, parseDaDate, srcRss, buildFeed, CONFIG };

@@ -11,7 +11,7 @@
  * Ret kilder og byer i CONFIG herunder. Intet andet skal ændres.
  */
 
-const VERSION = '23';
+const VERSION = '24';
 
 const CONFIG = {
   // ODIN RSS pr. beredskab. "areaDefault" = hændelser regnes som lokale, medmindre stationen ligger uden for området.
@@ -349,8 +349,14 @@ async function srcRss(list, source, sourceLabelFn, category, ctx) {
         if (!body) return;
         i.text = body.slice(0, 1200);
         if (!i.kommune) { // stedet står ofte først i brødteksten
-          const pm = matchPlace(body);
-          if (pm) { i.place = pm.place; i.kommune = pm.kommune; i.lat = pm.lat; i.lon = pm.lon; i.inArea = pm.inArea; }
+          // Fjern politikredsens navn og "Sydsjælland og Lolland-Falster" – det er afsender, ikke sted
+          const clean = body.replace(/sydsjællands? og lolland-falsters? politi/gi, ' ').replace(/(sydsjælland|midt- og vestsjælland)\s+og\s+lolland-falster/gi, ' ')
+            .replace(/lolland-falster/gi, ' ').replace(/politikreds\w*/gi, ' ');
+          const pm = matchPlace(clean);
+          // Kun en konkret by flytter meldingen ud af området; regionsord som Lolland/Falster gør ikke
+          if (pm && (pm.inArea || !/^(lolland|falster|guldborgsund)$/i.test(pm.place))) {
+            i.place = pm.place; i.kommune = pm.kommune; i.lat = pm.lat; i.lon = pm.lon; i.inArea = pm.inArea;
+          }
         }
       } catch (_) { /* behold meldingen uden brødtekst */ }
     }));

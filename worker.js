@@ -11,7 +11,7 @@
  * Ret kilder og byer i CONFIG herunder. Intet andet skal ændres.
  */
 
-const VERSION = '12';
+const VERSION = '13';
 
 const CONFIG = {
   // ODIN RSS pr. beredskab. "areaDefault" = hændelser regnes som lokale, medmindre stationen ligger uden for området.
@@ -46,6 +46,21 @@ const CONFIG = {
     url: 'https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-atom-denmark',
     // Varselsområder der dækker jeres kommuner
     areaRx: /(vestsjælland|sydsjælland|midtsjælland|sjælland(?!s odde)|zealand|møn|storebælt|great belt|smålandsfarvandet|faxe|næstved|slagelse|sorø|vordingborg|hele landet|danmark|denmark)/i,
+  },
+  // DMI's målinger (metObs): kun usædvanlige værdier i området de seneste timer
+  dmiObs: {
+    url: 'https://opendataapi.dmi.dk/v2/metObs/collections/observation/items',
+    bbox: '11.0,54.9,12.6,55.6', // vest,syd,øst,nord – dækker de fem kommuner
+    hours: 6,
+    maxKm: 15,
+    rules: [
+      { param: 'wind_gust_always_past1h', min: 20, title: v => `Kraftige vindstød: ${v} m/s`, unit: 'm/s' },
+      { param: 'wind_speed_past1h', min: 17, title: v => `Stormende kuling: middelvind ${v} m/s`, unit: 'm/s' },
+      { param: 'precip_past1h', min: 10, title: v => `Kraftig regn: ${v} mm på en time`, unit: 'mm' },
+      { param: 'temp_max_past1h', min: 28, title: v => `Høj temperatur: ${v} °C`, unit: '°C' },
+      { param: 'temp_min_past1h', max: -10, title: v => `Streng frost: ${v} °C`, unit: '°C' },
+      { param: 'visibility', max: 200, title: v => `Tæt tåge: sigtbarhed ${v} m`, unit: 'm' },
+    ],
   },
   // Lokale medier (RSS). Tilføj/fjern frit. Status vises i appen, så du kan se om et feed virker.
   // Kun artikler om hændelser (brand, uheld, politi osv.) fra medierne. Sæt til false for at få alle lokale artikler.
@@ -495,6 +510,47 @@ async function srcDmi(ctx) {
   return { items, errors };
 }
 
+/** DMI-målinger: henter observationer og melder kun dem, der passerer en tærskel. */
+async function srcDmiObs(ctx) {
+  const items = [], errors = [];
+  const cfg = CONFIG.dmiObs;
+  const end = Math.ceil(Date.now() / 6e5) * 6e5; // rundet op til 10 min, så svaret kan caches
+  const to = new Date(end), from = new Date(end - cfg.hours * 36e5);
+  const iso = d => d.toISOString().replace(/\.\d{3}Z$/, 'Z');
+  await Promise.all(cfg.rules.map(async rule => {
+    try {
+      const u = `${cfg.url}?parameterId=${rule.param}&bbox=${cfg.bbox}&datetime=${iso(from)}/${iso(to)}&limit=2000`;
+      const data = JSON.parse(await fetchText(u, ctx));
+      const best = new Map(); // station → mest ekstreme måling
+      for (const f of (data.features || [])) {
+        const p = f.properties || {}, v = +p.value;
+        if (!isFinite(v)) continue;
+        const hit = rule.min != null ? v >= rule.min : v <= rule.max;
+        if (!hit) continue;
+        const prev = best.get(p.stationId);
+        const more = !prev || (rule.min != null ? v > prev.v : v < prev.v);
+        if (more) best.set(p.stationId, { v, at: p.observed, c: centroid(f.geometry) });
+      }
+      for (const [station, m] of best) {
+        let place = 'station ' + station, kommune = null, inArea = false, lat = null, lon = null;
+        if (m.c) {
+          lat = m.c.lat; lon = m.c.lon;
+          const n = nearestPlace(lat, lon);
+          if (n && n.d <= cfg.maxKm) { place = n.p[0] + (n.d > 3 ? ' (' + n.d.toFixed(0) + ' km)' : ''); kommune = n.p[1]; inArea = !!n.p[1]; }
+        }
+        const val = String(Math.round(m.v * 10) / 10).replace('.', ',');
+        items.push({
+          id: 'dmiobs-' + hash(station + rule.param + String(m.at || '').slice(0, 10)), source: 'dmi', sourceLabel: 'DMI-måling',
+          time: parseDate(m.at), title: rule.title(val),
+          text: `Målt ved DMI-station ${station}${place ? ' nær ' + place.replace(/^station \d+$/, '') : ''}. Rå måling, ikke kvalitetskontrolleret af DMI.`.replace(' nær .', '.'),
+          url: 'https://www.dmi.dk/vejrarkiv/', place, kommune, lat, lon, inArea, category: 'vejr',
+        });
+      }
+    } catch (e) { errors.push('Målinger (' + rule.param + '): ' + e.message); }
+  }));
+  return { items, errors };
+}
+
 // ───────────────────────── handler ─────────────────────────
 
 const CORS = {
@@ -510,7 +566,10 @@ async function buildFeed(ctx) {
     ['vd', 'Vejdirektoratet', () => srcVd(ctx)],
     ['dsb', 'DSB', () => srcDsb(ctx)],
     ['lokaltog', 'Lokaltog', () => srcLokaltog(ctx)],
-    ['dmi', 'DMI', () => srcDmi(ctx)],
+    ['dmi', 'DMI', async () => {
+      const [a, b] = await Promise.all([srcDmi(ctx), srcDmiObs(ctx)]);
+      return { items: [...a.items, ...b.items], errors: [...a.errors, ...b.errors] };
+    }],
     ['medier', 'Lokale medier', () => srcRss(CONFIG.media, 'medier', f => f.label, 'medier', ctx)],
   ];
   const results = await Promise.all(defs.map(async ([key, label, fn]) => {
@@ -564,4 +623,4 @@ export default {
 };
 
 // Eksporter til test i Node (ignoreres af Cloudflare)
-export const _test = { parseRss, parseDate, matchPlace, nearestPlace, stripHtml, srcOdin, srcVd, srcDsb, srcLokaltog, srcDmi, parseDaDate, srcRss, buildFeed, CONFIG };
+export const _test = { parseRss, parseDate, matchPlace, nearestPlace, stripHtml, srcOdin, srcVd, srcDsb, srcLokaltog, srcDmi, srcDmiObs, parseDaDate, srcRss, buildFeed, CONFIG };

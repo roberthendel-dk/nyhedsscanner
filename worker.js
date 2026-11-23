@@ -786,6 +786,7 @@ async function politiBody(link, title) {
     if (/^abonner\b|^flere meddelelser|^følg pressemeddelelser|^kontakter?$/i.test(l)) break;
     if (/^\d{1,2}\.\d{1,2}\.\d{4} \d{1,2}:\d{2}/.test(l) || /\| (myndighedsmeddelelse|pressemeddelelse)$/i.test(l) || /politi$/i.test(l) && l.length < 60 && !out.length) continue; // dato- og afsenderlinje
     if (l.toLowerCase() === t) continue;
+    if (/^(sydsjællands og lolland-falsters politi|midt- og vestsjællands politi)$/i.test(l)) continue; // afsenderlinje
     out.push(l);
     if (out.join(' ').length > 1200) break;
   }

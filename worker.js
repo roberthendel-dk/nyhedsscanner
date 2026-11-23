@@ -11,7 +11,7 @@
  * Ret kilder og byer i CONFIG herunder. Intet andet skal ændres.
  */
 
-const VERSION = '13';
+const VERSION = '14';
 
 const CONFIG = {
   // ODIN RSS pr. beredskab. "areaDefault" = hændelser regnes som lokale, medmindre stationen ligger uden for området.
@@ -23,6 +23,8 @@ const CONFIG = {
   // Politiets korte meldinger (POLITI | UPDATE) via Ritzau. Alle fem kommuner hører under Sydsjællands og Lolland-Falsters Politi.
   politi: [
     { url: 'https://via.ritzau.dk/rss/short-messages/latest?publisherId=90594', label: 'Sydsjællands og Lolland-Falsters Politi', areaDefault: true }, // uden stedsangivelse = lokal
+    // Pressemeddelelser – her udkommer bl.a. "Uddrag af døgnrapporten"
+    { url: 'https://via.ritzau.dk/rss/releases/latest?publisherId=90594', label: 'Sydsjællands og Lolland-Falsters Politi', areaDefault: true },
   ],
   // Vejdirektoratets offentlige data bag trafikkort.vejdirektoratet.dk
   vd: {
@@ -61,6 +63,17 @@ const CONFIG = {
       { param: 'temp_min_past1h', max: -10, title: v => `Streng frost: ${v} °C`, unit: '°C' },
       { param: 'visibility', max: 200, title: v => `Tæt tåge: sigtbarhed ${v} m`, unit: 'm' },
     ],
+  },
+  // DMI lyn: nedslag i området den seneste time, samlet pr. kommune
+  dmiLightning: {
+    url: 'https://opendataapi.dmi.dk/v2/lightningdata/collections/observation/items',
+    bbox: '11.0,54.9,12.6,55.6', minutes: 60, maxKm: 12,
+  },
+  // DMI vandstand (havnemålere): usædvanligt høj eller lav vandstand de seneste timer
+  dmiSea: {
+    url: 'https://opendataapi.dmi.dk/v2/oceanObs/collections/observation/items',
+    bbox: '11.0,54.9,12.6,55.6', hours: 6, maxKm: 12,
+    high: 90, low: -80, // cm i forhold til normal (DVR90)
   },
   // Lokale medier (RSS). Tilføj/fjern frit. Status vises i appen, så du kan se om et feed virker.
   // Kun artikler om hændelser (brand, uheld, politi osv.) fra medierne. Sæt til false for at få alle lokale artikler.
@@ -551,6 +564,74 @@ async function srcDmiObs(ctx) {
   return { items, errors };
 }
 
+const isoMin = d => new Date(d).toISOString().replace(/\.\d{3}Z$/, 'Z');
+const roundedNow = () => Math.ceil(Date.now() / 3e5) * 3e5; // 5 min, så svar kan caches
+
+/** DMI lyn: tæller nedslag pr. kommune den seneste time. */
+async function srcDmiLightning(ctx) {
+  const items = [], errors = [];
+  const cfg = CONFIG.dmiLightning;
+  try {
+    const end = roundedNow(), start = end - cfg.minutes * 6e4;
+    const u = `${cfg.url}?bbox=${cfg.bbox}&datetime=${isoMin(start)}/${isoMin(end)}&limit=5000`;
+    const data = JSON.parse(await fetchText(u, ctx));
+    const per = new Map(); // kommune → {n, last, places}
+    for (const f of (data.features || [])) {
+      const c = centroid(f.geometry); if (!c) continue;
+      const n = nearestPlace(c.lat, c.lon);
+      if (!n || n.d > cfg.maxKm || !n.p[1]) continue;
+      const k = n.p[1], p = f.properties || {};
+      const e = per.get(k) || { n: 0, last: null, places: new Map() };
+      e.n += Math.max(1, +p.strokes || 1);
+      if (!e.last || (p.observed || '') > e.last) e.last = p.observed;
+      e.places.set(n.p[0], (e.places.get(n.p[0]) || 0) + 1);
+      per.set(k, e);
+    }
+    for (const [k, e] of per) {
+      const top = [...e.places.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3).map(x => x[0]);
+      items.push({
+        id: 'dmilyn-' + hash(k + String(e.last || '').slice(0, 13)), source: 'dmi', sourceLabel: 'DMI-lyn',
+        time: parseDate(e.last), title: `Lyn: ${e.n} nedslag i ${k} Kommune seneste time`,
+        text: 'Flest nær ' + top.join(', ') + '. Registreret af DMI\'s lynpejlere.',
+        url: 'https://www.dmi.dk/lynkort/', place: top[0], kommune: k, inArea: true, category: 'vejr',
+      });
+    }
+  } catch (e) { errors.push('Lyn: ' + e.message); }
+  return { items, errors };
+}
+
+/** DMI vandstand: melder usædvanligt høj/lav vandstand ved havnemålerne i området. */
+async function srcDmiSea(ctx) {
+  const items = [], errors = [];
+  const cfg = CONFIG.dmiSea;
+  try {
+    const end = roundedNow(), start = end - cfg.hours * 36e5;
+    const u = `${cfg.url}?parameterId=sealev_dvr&bbox=${cfg.bbox}&datetime=${isoMin(start)}/${isoMin(end)}&limit=5000`;
+    const data = JSON.parse(await fetchText(u, ctx));
+    const best = new Map(); // station → mest ekstreme
+    for (const f of (data.features || [])) {
+      const p = f.properties || {}, v = +p.value; if (!isFinite(v)) continue;
+      if (v < cfg.high && v > cfg.low) continue;
+      const prev = best.get(p.stationId);
+      if (!prev || Math.abs(v) > Math.abs(prev.v)) best.set(p.stationId, { v, at: p.observed, c: centroid(f.geometry) });
+    }
+    for (const [st, m] of best) {
+      const n = m.c ? nearestPlace(m.c.lat, m.c.lon) : null;
+      const ok = n && n.d <= cfg.maxKm;
+      const place = ok ? n.p[0] : 'station ' + st, kommune = ok ? n.p[1] : null;
+      const high = m.v > 0;
+      items.push({
+        id: 'dmihav-' + hash(st + (high ? 'h' : 'l') + String(m.at || '').slice(0, 10)), source: 'dmi', sourceLabel: 'DMI-vandstand',
+        time: parseDate(m.at), title: `${high ? 'Høj' : 'Lav'} vandstand: ${high ? '+' : ''}${Math.round(m.v)} cm ved ${place}`,
+        text: `Højeste udsving målt ved havnemåler ${st} de seneste ${cfg.hours} timer (cm i forhold til normal vandstand, DVR90). Rå måling.`,
+        url: 'https://www.dmi.dk/hav-og-is/temaforside-hav/vandstand/', place, kommune, lat: m.c && m.c.lat, lon: m.c && m.c.lon,
+        inArea: !!kommune, category: 'vejr',
+      });
+    }
+  } catch (e) { errors.push('Vandstand: ' + e.message); }
+  return { items, errors };
+}
+
 // ───────────────────────── handler ─────────────────────────
 
 const CORS = {
@@ -567,8 +648,8 @@ async function buildFeed(ctx) {
     ['dsb', 'DSB', () => srcDsb(ctx)],
     ['lokaltog', 'Lokaltog', () => srcLokaltog(ctx)],
     ['dmi', 'DMI', async () => {
-      const [a, b] = await Promise.all([srcDmi(ctx), srcDmiObs(ctx)]);
-      return { items: [...a.items, ...b.items], errors: [...a.errors, ...b.errors] };
+      const parts = await Promise.all([srcDmi(ctx), srcDmiObs(ctx), srcDmiLightning(ctx), srcDmiSea(ctx)]);
+      return { items: parts.flatMap(p => p.items), errors: parts.flatMap(p => p.errors) };
     }],
     ['medier', 'Lokale medier', () => srcRss(CONFIG.media, 'medier', f => f.label, 'medier', ctx)],
   ];
@@ -623,4 +704,4 @@ export default {
 };
 
 // Eksporter til test i Node (ignoreres af Cloudflare)
-export const _test = { parseRss, parseDate, matchPlace, nearestPlace, stripHtml, srcOdin, srcVd, srcDsb, srcLokaltog, srcDmi, srcDmiObs, parseDaDate, srcRss, buildFeed, CONFIG };
+export const _test = { parseRss, parseDate, matchPlace, nearestPlace, stripHtml, srcOdin, srcVd, srcDsb, srcLokaltog, srcDmi, srcDmiObs, srcDmiLightning, srcDmiSea, parseDaDate, srcRss, buildFeed, CONFIG };

@@ -11,7 +11,7 @@
  * Ret kilder og byer i CONFIG herunder. Intet andet skal ændres.
  */
 
-const VERSION = '21';
+const VERSION = '22';
 
 const CONFIG = {
   // ODIN RSS pr. beredskab. "areaDefault" = hændelser regnes som lokale, medmindre stationen ligger uden for området.
@@ -265,20 +265,15 @@ function hash(s) {
   return (h >>> 0).toString(36);
 }
 
+/** Henter en kilde. Bruger ikke Cloudflares cache-API pr. kilde, da hvert opslag tæller med i
+ *  gratisplanens grænse på 50 udgående forespørgsler pr. kørsel. I stedet caches hele feedet (se handler). */
 async function fetchText(url, ctx) {
-  const cache = caches.default;
-  const key = new Request(url, { method: 'GET' });
-  const hit = await cache.match(key);
-  if (hit) return hit.text();
   const res = await fetch(url, {
     headers: { 'User-Agent': 'Mozilla/5.0 (Nyhedsvagtens vaerktoejskasse; redaktionelt overblik)', 'Accept': '*/*' },
-    cf: { cacheTtl: CONFIG.cacheSeconds },
     signal: AbortSignal.timeout(CONFIG.timeoutMs),
   }).catch(e => { throw new Error(e && e.name === 'TimeoutError' ? 'svarede ikke inden ' + CONFIG.timeoutMs / 1000 + ' sek.' : (e && e.message) || 'netværksfejl'); });
   if (!res.ok) throw new Error('HTTP ' + res.status);
-  const body = await res.text();
-  ctx && ctx.waitUntil && ctx.waitUntil(cache.put(key, new Response(body, { headers: { 'Cache-Control': 'max-age=' + CONFIG.cacheSeconds } })).catch(() => {}));
-  return body;
+  return res.text();
 }
 
 // ───────────────────────── kilder ─────────────────────────
@@ -817,12 +812,18 @@ export default {
     const url = new URL(request.url);
     if (request.method === 'OPTIONS') return new Response(null, { headers: CORS });
     if (url.pathname === '/api/feed') {
+      // Hele feedet caches i CONFIG.cacheSeconds, så mange samtidige brugere ikke henter alle kilder hver gang.
+      const cache = caches.default;
+      const key = new Request(url.origin + '/api/feed?v=' + VERSION, { method: 'GET' });
+      try { const hit = await cache.match(key); if (hit) return hit; } catch (_) {}
       let body;
       try { body = await buildFeed(ctx); }
       catch (e) { body = { updated: new Date().toISOString(), items: [], sources: [], error: String(e && e.stack || e) }; }
-      return new Response(JSON.stringify(body), {
-        headers: { ...CORS, 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'max-age=20' },
+      const res = new Response(JSON.stringify(body), {
+        headers: { ...CORS, 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'public, max-age=' + CONFIG.cacheSeconds },
       });
+      try { ctx.waitUntil(cache.put(key, res.clone())); } catch (_) {}
+      return res;
     }
     return new Response('Nyhedsvagtens værktøjskasse: worker kører (version ' + VERSION + '). Data: /api/feed', { headers: { ...CORS, 'Content-Type': 'text/plain; charset=utf-8' } });
   },

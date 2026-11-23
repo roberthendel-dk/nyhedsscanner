@@ -11,7 +11,7 @@
  * Ret kilder og byer i CONFIG herunder. Intet andet skal ændres.
  */
 
-const VERSION = '20';
+const VERSION = '21';
 
 const CONFIG = {
   // ODIN RSS pr. beredskab. "areaDefault" = hændelser regnes som lokale, medmindre stationen ligger uden for området.
@@ -93,8 +93,6 @@ const CONFIG = {
       Vordingborg: ['4720','4735','4750','4760','4771','4772','4773','4780','4791','4792','4793'],
     },
   },
-  // Midt- og Sydsjællands Brand & Redning: døgnrapport (flere detaljer end ODIN)
-  msbr: { url: 'https://api.msbr.dk:8443/dognrapport/?beredskab=MSBR', page: 'https://msbr.dk/doegnrapport/' },
   // Agersø-Omø-færgerne: ændringer i sejlplanen
   faerger: { url: 'https://aofaerger.slagelse.dk/da/sejlplan/aendringer-i-sejlplan/', daysAhead: 3 },
   // Lokale medier (RSS). Tilføj/fjern frit. Status vises i appen, så du kan se om et feed virker.
@@ -720,44 +718,6 @@ async function srcEl(ctx) {
   return { items, errors };
 }
 
-/** MSBR døgnrapport: HTML-tabel (div.table-row / div.table-cell). Kolonner aflæses fra overskriftsrækken. */
-async function srcMsbr(ctx) {
-  const items = [], errors = [];
-  try {
-    const html = await fetchText(CONFIG.msbr.url, ctx);
-    const parts = html.split(/<div[^>]*class="table-row/).slice(1);
-    const rows = parts.map(p => {
-      const header = /^\s*table-row--header|^[^"]*table-row--header/.test(p.slice(0, 120));
-      const cells = [...p.matchAll(/<div[^>]*class="[^"]*table-cell[^"]*"[^>]*>([\s\S]*?)<\/div>/g)].map(c => stripHtml(c[1]).replace(/\s+/g, ' ').trim());
-      return { header, cells };
-    }).filter(r => r.cells.length);
-    const head = (rows.find(r => r.header) || rows[0] || { cells: [] }).cells.map(c => c.toLowerCase());
-    const col = rx => head.findIndex(c => rx.test(c));
-    let iDate = col(/dato/); const iTime = col(/^tid$|^kl\.?$|klokken|tidspunkt/); if (iDate < 0) iDate = col(/tid|alarm/);
-    const iStation = col(/station/), iType = col(/melding|type|hændelse|art|alarm(?!.*tid)/);
-    const iAddr = col(/adresse|vej|sted/), iTown = col(/by$|^by|postnr|område/);
-    for (const r of rows) {
-      if (r.header || r === rows[0] && !rows.some(x => x.header)) continue;
-      const c = r.cells, val = k => (k >= 0 ? c[k] || '' : '');
-      const station = val(iStation), type = val(iType) || c.find(x => /brand|fuh|redning|forurening|alarm|isl|eftersyn/i.test(x)) || '';
-      const when = [val(iDate), val(iTime)].filter(Boolean).join(' ') || c.find(x => /\d{1,2}[-./]\d{1,2}[-./]\d{2,4}/.test(x)) || '';
-      const addr = [val(iAddr), val(iTown)].filter(Boolean).join(', ');
-      const pm = matchPlace(val(iTown)) || matchPlace(addr) || matchPlace(station);
-      const time = parseDate(when.replace(/(\d{1,2})[-./](\d{1,2})[-./](\d{2})(?!\d)/, (m, d, mo, y) => `${d}-${mo}-20${y}`));
-      const text = head.length === c.length ? c.map((v, k) => v && head[k] ? `${head[k][0].toUpperCase() + head[k].slice(1)}: ${v}` : '').filter(Boolean).join(' · ') : c.join(' · ');
-      items.push({
-        id: 'msbr-' + hash(c.join('|')), source: 'odin', sourceLabel: 'MSBR døgnrapport',
-        time, title: type || 'Udrykning', text, url: CONFIG.msbr.page,
-        place: addr || station, kommune: pm ? pm.kommune : null, lat: pm && pm.lat, lon: pm && pm.lon,
-        inArea: pm ? pm.inArea : !/ringsted/i.test(station), category: 'udrykning', msbr: true,
-      });
-    }
-    if (!items.length) errors.push('Fandt ingen rækker i døgnrapporten – MSBR har måske ændret opbygning');
-    else if (!items.some(i => i.time)) errors.push('Kunne ikke aflæse tidspunkter (kolonner: ' + head.join(', ') + ')');
-  } catch (e) { errors.push(e.message); }
-  return { items, errors };
-}
-
 /** Agersø-Omø-færgerne: ændringer i sejlplanen, læst som tekst fra siden. */
 async function srcFaerger(ctx) {
   const items = [], errors = [];
@@ -804,13 +764,7 @@ const CORS = {
 
 async function buildFeed(ctx) {
   const defs = [
-    ['odin', 'ODIN 112-puls', async () => {
-      const [a, b] = await Promise.all([srcOdin(ctx), srcMsbr(ctx)]);
-      // Samme alarm i ODIN og MSBR's døgnrapport: behold MSBR (flere detaljer)
-      const ms = b.items.filter(i => i.time);
-      const odin = a.items.filter(o => !ms.some(m => Math.abs(Date.parse(m.time) - Date.parse(o.time || 0)) <= 5 * 6e4 && (m.kommune === o.kommune || !m.kommune)));
-      return { items: [...odin, ...b.items], errors: [...a.errors, ...b.errors.map(e => 'MSBR: ' + e)] };
-    }],
+    ['odin', 'ODIN 112-puls', () => srcOdin(ctx)],
     ['politi', 'Politiet', () => srcRss(CONFIG.politi, 'politi', f => 'Politi · ' + f.label.replace(' Politi', ''), 'politi', ctx)],
     ['vd', 'Vejdirektoratet', () => srcVd(ctx)],
     ['dsb', 'DSB', () => srcDsb(ctx)],
@@ -875,4 +829,4 @@ export default {
 };
 
 // Eksporter til test i Node (ignoreres af Cloudflare)
-export const _test = { parseRss, parseDate, matchPlace, nearestPlace, stripHtml, srcOdin, srcVd, srcDsb, srcLokaltog, srcStorebaelt, srcEl, srcMsbr, srcFaerger, srcDmi, srcDmiObs, srcDmiLightning, srcDmiSea, parseDaDate, srcRss, buildFeed, CONFIG };
+export const _test = { parseRss, parseDate, matchPlace, nearestPlace, stripHtml, srcOdin, srcVd, srcDsb, srcLokaltog, srcStorebaelt, srcEl, srcFaerger, srcDmi, srcDmiObs, srcDmiLightning, srcDmiSea, parseDaDate, srcRss, buildFeed, CONFIG };

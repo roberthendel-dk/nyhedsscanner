@@ -11,7 +11,7 @@
  * Ret kilder og byer i CONFIG herunder. Intet andet skal ændres.
  */
 
-const VERSION = '29';
+const VERSION = '30';
 
 const CONFIG = {
   // ODIN RSS pr. beredskab. "areaDefault" = hændelser regnes som lokale, medmindre stationen ligger uden for området.
@@ -100,6 +100,7 @@ const CONFIG = {
   // Lokale medier (RSS). Tilføj/fjern frit. Status vises i appen, så du kan se om et feed virker.
   // Kun artikler om hændelser (brand, uheld, politi osv.) fra medierne. Sæt til false for at få alle lokale artikler.
   mediaOnlyIncidents: true,
+  mediaMaxChars: 200, // højst så mange anslag fra artiklen ud over overskriften
   media: [
     { url: 'https://www.tv2east.dk/rss', label: 'TV2 Øst' },
     // { url: 'https://www.sn.dk/rss/...', label: 'sn.dk' },  // indsæt sn.dk's RSS-adresse, hvis I har den
@@ -166,6 +167,15 @@ const URL_SECTIONS = { faxe: 'Faxe', soroe: 'Sorø', soro: 'Sorø', naestved: 'N
   ringsted: null, koege: null, stevns: null, holbaek: null, kalundborg: null, odsherred: null, lolland: null, guldborgsund: null, roskilde: null, lejre: null, greve: null, solroed: null };
 
 // ───────────────────────── helpers ─────────────────────────
+
+/** Forkorter tekst til højst n anslag, afbrudt ved et helt ord, med … til sidst. */
+function shorten(s, n) {
+  s = String(s || '').replace(/\s+/g, ' ').trim();
+  if (s.length <= n) return s;
+  const cut = s.slice(0, n - 1);
+  const sp = cut.lastIndexOf(' ');
+  return (sp > n * 0.6 ? cut.slice(0, sp) : cut).replace(/[\s,.;:–-]+$/, '') + '…';
+}
 
 const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const PLACE_RX = PLACES
@@ -334,7 +344,8 @@ async function srcRss(list, source, sourceLabelFn, category, ctx) {
         items.push({
           id: source + '-' + hash(((it.link || it.guid || it.title) + '').split('#')[0]),
           source, sourceLabel: sourceLabelFn(f),
-          time: parseDate(it.pubDate), title: it.title, text: it.description.slice(0, 1200),
+          time: parseDate(it.pubDate), title: it.title,
+          text: source === 'medier' ? shorten(it.description, CONFIG.mediaMaxChars) : it.description.slice(0, 1200),
           url: it.link, place: pm ? pm.place : '', kommune: pm ? pm.kommune : null,
           lat: pm && pm.lat, lon: pm && pm.lon, inArea: pm ? pm.inArea : !!f.areaDefault, category,
         });

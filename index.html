@@ -117,7 +117,7 @@ footer{font-size:12px;color:var(--mut);padding:24px 0 40px}
   <a href="https://www.lokaltog.dk/trafikinformation/planlagte-aendringer/" rel="noopener">Lokaltog</a> ·
   <a href="https://www.dmi.dk/varsler/" rel="noopener">DMI-varsler via MeteoAlarm</a> ·
   <a href="https://storebaelt.dk/trafik-vejr/" rel="noopener">Sund &amp; Bælt</a> ·
-  strømafbrydelser fra <a href="https://elnet.dk/" rel="noopener">elnetselskabernes fælles platform</a> · lokale medier. ODIN-data må kun bringes med tydelig kildeangivelse og link til odin.dk/112puls.
+  <a href="https://msbr.dk/doegnrapport/" rel="noopener">MSBR døgnrapport</a> · <a href="https://aofaerger.slagelse.dk/da/sejlplan/aendringer-i-sejlplan/" rel="noopener">Agersø-Omø-færgerne</a> · strømafbrydelser fra <a href="https://elnet.dk/" rel="noopener">elnetselskabernes fælles platform</a> · lokale medier. ODIN-data må kun bringes med tydelig kildeangivelse og link til odin.dk/112puls.
 </footer>
 
 <dialog id="settings">
@@ -141,7 +141,7 @@ footer{font-size:12px;color:var(--mut);padding:24px 0 40px}
 {
 const DEFAULT_URL = 'https://super-dream-aca8.robert-hendel.workers.dev';
 const SOURCES = [
-  ['odin', 'ODIN 112'], ['politi', 'Politi'], ['vd', 'Vejdirektoratet'], ['dsb', 'DSB'], ['lokaltog', 'Lokaltog'], ['storebaelt', 'Sund & Bælt'], ['el', 'Strøm'], ['dmi', 'DMI'], ['medier', 'Lokale medier'],
+  ['odin', 'ODIN 112'], ['politi', 'Politi'], ['vd', 'Vejdirektoratet'], ['dsb', 'DSB'], ['lokaltog', 'Lokaltog'], ['storebaelt', 'Sund & Bælt'], ['el', 'Strøm'], ['faerger', 'Færger'], ['dmi', 'DMI'], ['medier', 'Lokale medier'],
 ];
 const KOMMUNER = ['Faxe', 'Sorø', 'Næstved', 'Vordingborg', 'Slagelse'];
 const ROUTINE = /\b(ISL-?Forespørgsel|ISL-?Eftersyn|Eftersyn|Prøve|Forespørgsel|Elevator stop)\b/i;
@@ -228,7 +228,7 @@ function visible() {
 // Ekstra links ved visse kilder
 const MSBR_URL = 'https://msbr.dk/doegnrapport/';
 function isMsbr(i) {
-  if (i.source !== 'odin') return false;
+  if (i.source !== 'odin' || i.msbr) return false; // MSBR-rækker linker allerede til døgnrapporten
   return /Midt- og Sydsjællands/i.test(i.text || '') || ['Faxe', 'Næstved', 'Vordingborg'].includes(i.kommune) || /ringsted/i.test(i.place || '');
 }
 
@@ -242,7 +242,7 @@ function isSlagelseBR(i) {
 }
 
 // Ikoner foran kilden
-const ICON = { politi: '👮', odin: '🚒', el: '⚡', vd: '🛣️', dsb: '🚂', lokaltog: '🚉', dmi: '🌦️' };
+const ICON = { politi: '👮', odin: '🚒', el: '⚡', vd: '🛣️', dsb: '🚂', lokaltog: '🚉', dmi: '🌦️', faerger: '⛴️' };
 const icon = s => ICON[s] ? `<span class="ico" aria-hidden="true">${ICON[s]}</span>` : '';
 
 function render() {

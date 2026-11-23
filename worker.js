@@ -11,7 +11,7 @@
  * Ret kilder og byer i CONFIG herunder. Intet andet skal ændres.
  */
 
-const VERSION = '17';
+const VERSION = '18';
 
 const CONFIG = {
   // ODIN RSS pr. beredskab. "areaDefault" = hændelser regnes som lokale, medmindre stationen ligger uden for området.
@@ -777,6 +777,41 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     if (request.method === 'OPTIONS') return new Response(null, { headers: CORS });
+    if (url.pathname === '/api/debug-3') {
+      // Midlertidig testside: MSBR-døgnrapport, Agersø-Omø-færgerne og Movia
+      const get = async (u, ms = 8000, ref) => {
+        const t0 = Date.now();
+        try {
+          const r = await fetch(u, { headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json, text/html, */*', ...(ref ? { Referer: ref } : {}) }, signal: AbortSignal.timeout(ms) });
+          return { status: r.status, type: r.headers.get('content-type'), ms: Date.now() - t0, text: await r.text() };
+        } catch (e) { return { error: String(e && e.message || e), ms: Date.now() - t0 }; }
+      };
+      const out = { version: VERSION };
+      // 1) MSBR
+      const m = await get('https://api.msbr.dk:8443/dognrapport/?beredskab=MSBR', 9000, 'https://msbr.dk/doegnrapport/');
+      out.msbr = { status: m.status, type: m.type, error: m.error, ms: m.ms, length: (m.text || '').length, start: (m.text || '').slice(0, 2500) };
+      // 2) Færgerne
+      const f = await get('https://aofaerger.slagelse.dk/', 9000);
+      const ft = f.text || '';
+      const fi = ft.search(/ændring(er)? i sejlplan|aflys|driftsforstyrr/i);
+      out.faerger = { status: f.status, error: f.error, length: ft.length,
+        around: fi >= 0 ? ft.slice(Math.max(0, fi - 1500), fi + 2500) : null,
+        links: [...new Set([...ft.matchAll(/href="([^"]+)"/g)].map(x => x[1]).filter(x => /sejl|drift|aflys|nyhed|aendr|ændr/i.test(x)))].slice(0, 30) };
+      // 3) Movia
+      const mv = await get('https://www.moviatrafik.dk/', 9000);
+      const mt = mv.text || '';
+      const scripts = [...mt.matchAll(/<script[^>]*src="([^"]+)"/gi)].map(x => new URL(x[1], 'https://www.moviatrafik.dk/').href);
+      const strs = new Set();
+      for (const s of scripts.filter(s => /moviatrafik/.test(s)).slice(0, 6)) {
+        const js = await get(s, 9000);
+        for (const x of (js.text || '').matchAll(/["'`]((?:https?:)?\/\/[^"'`\s]{4,200}|\/[A-Za-z0-9_\-./]{3,120})["'`]/g)) {
+          if (/api|trafik|traffic|drift|disrupt|omk|aflys|situation|deviation|message/i.test(x[1]) && !/\.(png|svg|jpe?g|css|woff)/i.test(x[1])) strs.add(x[1]);
+        }
+      }
+      out.movia = { status: mv.status, error: mv.error, length: mt.length, scripts, strings: [...strs].slice(0, 60),
+        links: [...new Set([...mt.matchAll(/href="([^"]+)"/g)].map(x => x[1]).filter(x => /trafik|drift|omk|aflys/i.test(x)))].slice(0, 30) };
+      return new Response(JSON.stringify(out, null, 1), { headers: { ...CORS, 'Content-Type': 'application/json; charset=utf-8' } });
+    }
     if (url.pathname === '/api/feed') {
       let body;
       try { body = await buildFeed(ctx); }

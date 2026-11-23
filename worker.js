@@ -11,7 +11,7 @@
  * Ret kilder og byer i CONFIG herunder. Intet andet skal ændres.
  */
 
-const VERSION = '18';
+const VERSION = '19';
 
 const CONFIG = {
   // ODIN RSS pr. beredskab. "areaDefault" = hændelser regnes som lokale, medmindre stationen ligger uden for området.
@@ -778,38 +778,40 @@ export default {
     const url = new URL(request.url);
     if (request.method === 'OPTIONS') return new Response(null, { headers: CORS });
     if (url.pathname === '/api/debug-3') {
-      // Midlertidig testside: MSBR-døgnrapport, Agersø-Omø-færgerne og Movia
+      // Midlertidig testside (runde 2): MSBR-rækker, færgernes ændringsside og Movia
       const get = async (u, ms = 8000, ref) => {
-        const t0 = Date.now();
         try {
           const r = await fetch(u, { headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json, text/html, */*', ...(ref ? { Referer: ref } : {}) }, signal: AbortSignal.timeout(ms) });
-          return { status: r.status, type: r.headers.get('content-type'), ms: Date.now() - t0, text: await r.text() };
-        } catch (e) { return { error: String(e && e.message || e), ms: Date.now() - t0 }; }
+          return { status: r.status, type: r.headers.get('content-type'), text: await r.text() };
+        } catch (e) { return { error: String(e && e.message || e) }; }
       };
       const out = { version: VERSION };
-      // 1) MSBR
+      // 1) MSBR: vis de første rækker i tabellen
       const m = await get('https://api.msbr.dk:8443/dognrapport/?beredskab=MSBR', 9000, 'https://msbr.dk/doegnrapport/');
-      out.msbr = { status: m.status, type: m.type, error: m.error, ms: m.ms, length: (m.text || '').length, start: (m.text || '').slice(0, 2500) };
-      // 2) Færgerne
-      const f = await get('https://aofaerger.slagelse.dk/', 9000);
+      const mt = m.text || '';
+      const hi = mt.search(/table-row--header/);
+      out.msbr = { status: m.status, rows: (mt.match(/class="table-row/g) || []).length, header_and_rows: hi >= 0 ? mt.slice(hi - 200, hi + 5000) : mt.slice(-5000) };
+      // 2) Færgerne: ændringssiden
+      const f = await get('https://aofaerger.slagelse.dk/da/sejlplan/aendringer-i-sejlplan/', 9000);
       const ft = f.text || '';
-      const fi = ft.search(/ændring(er)? i sejlplan|aflys|driftsforstyrr/i);
-      out.faerger = { status: f.status, error: f.error, length: ft.length,
-        around: fi >= 0 ? ft.slice(Math.max(0, fi - 1500), fi + 2500) : null,
-        links: [...new Set([...ft.matchAll(/href="([^"]+)"/g)].map(x => x[1]).filter(x => /sejl|drift|aflys|nyhed|aendr|ændr/i.test(x)))].slice(0, 30) };
-      // 3) Movia
-      const mv = await get('https://www.moviatrafik.dk/', 9000);
-      const mt = mv.text || '';
-      const scripts = [...mt.matchAll(/<script[^>]*src="([^"]+)"/gi)].map(x => new URL(x[1], 'https://www.moviatrafik.dk/').href);
-      const strs = new Set();
-      for (const s of scripts.filter(s => /moviatrafik/.test(s)).slice(0, 6)) {
-        const js = await get(s, 9000);
-        for (const x of (js.text || '').matchAll(/["'`]((?:https?:)?\/\/[^"'`\s]{4,200}|\/[A-Za-z0-9_\-./]{3,120})["'`]/g)) {
-          if (/api|trafik|traffic|drift|disrupt|omk|aflys|situation|deviation|message/i.test(x[1]) && !/\.(png|svg|jpe?g|css|woff)/i.test(x[1])) strs.add(x[1]);
-        }
+      const body = ft.replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<style[\s\S]*?<\/style>/gi, ' ').replace(/<picture[\s\S]*?<\/picture>/gi, ' ');
+      const txt = body.replace(/<[^>]+>/g, '\n').replace(/[ \t]+/g, ' ').replace(/\n\s*\n+/g, '\n').trim();
+      const ti = txt.search(/ændring/i);
+      const nuxt = (ft.match(/window\.__NUXT__\s*=\s*([\s\S]{0,3000})/) || [])[1] || null;
+      out.faerger = { status: f.status, error: f.error, length: ft.length, text: txt.slice(Math.max(0, ti - 200), ti + 3500), nuxt_start: nuxt && nuxt.slice(0, 1500),
+        html_around: (() => { const k = ft.search(/aflys|ændret|ingen ændring|ingen afgang/i); return k >= 0 ? ft.slice(Math.max(0, k - 1200), k + 1800) : null; })() };
+      // 3) Movia: kandidatsider og strenge i hovedprogrammet
+      const tries = [];
+      for (const path of ['/trafikinformation', '/trafikinfo', '/rejseinformation/trafikinformation', '/kundeservice/trafikinformation', '/drift', '/api/trafikinformation', '/umbraco/api/trafficinformation/get']) {
+        const r = await get('https://www.moviatrafik.dk' + path, 6000);
+        tries.push({ path, status: r.status, type: r.type, error: r.error, start: (r.text || '').replace(/\s+/g, ' ').slice(0, 300) });
       }
-      out.movia = { status: mv.status, error: mv.error, length: mt.length, scripts, strings: [...strs].slice(0, 60),
-        links: [...new Set([...mt.matchAll(/href="([^"]+)"/g)].map(x => x[1]).filter(x => /trafik|drift|omk|aflys/i.test(x)))].slice(0, 30) };
+      const bundle = await get('https://www.moviatrafik.dk/assets/index.c980fb56.js', 9000);
+      const bt = bundle.text || '';
+      const strs = new Set();
+      for (const x of bt.matchAll(/["'`]([^"'`\s]{3,160})["'`]/g)) if (/(\/api\/|umbraco|graphql|trafik|traffic|disturb|driftsforstyr|omkoersel|omkørsel|alert|notice|situation)/i.test(x[1])) strs.add(x[1]);
+      const chunks = [...new Set([...bt.matchAll(/["'`](\.?\/?assets\/[A-Za-z0-9_.\-]+\.js)["'`]/g)].map(x => x[1]))].slice(0, 40);
+      out.movia = { tries, bundle_length: bt.length, strings: [...strs].slice(0, 80), chunks };
       return new Response(JSON.stringify(out, null, 1), { headers: { ...CORS, 'Content-Type': 'application/json; charset=utf-8' } });
     }
     if (url.pathname === '/api/feed') {

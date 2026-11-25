@@ -1,5 +1,5 @@
 /**
- * Nyhedsvagtens værktøjskasse · Cloudflare Worker
+ * Update by RH · Cloudflare Worker
  * Henter ODIN 112-puls, politiets meldinger (Ritzau), Vejdirektoratet, DSB, Lokaltog (Østbanen), DMI-varsler
  * og lokale medier, filtrerer til Faxe, Sorø, Næstved, Vordingborg og Slagelse
  * og returnerer én samlet JSON-liste med CORS, så webappen kan læse den fra alle enheder.
@@ -281,7 +281,7 @@ function hash(s) {
  *  gratisplanens grænse på 50 udgående forespørgsler pr. kørsel. I stedet caches hele feedet (se handler). */
 async function fetchText(url, ctx) {
   const res = await fetch(url, {
-    headers: { 'User-Agent': 'Mozilla/5.0 (Nyhedsvagtens vaerktoejskasse; redaktionelt overblik)', 'Accept': '*/*' },
+    headers: { 'User-Agent': 'Mozilla/5.0 (Update by RH; redaktionelt overblik)', 'Accept': '*/*' },
     signal: AbortSignal.timeout(CONFIG.timeoutMs),
   }).catch(e => { throw new Error(e && e.name === 'TimeoutError' ? 'svarede ikke inden ' + CONFIG.timeoutMs / 1000 + ' sek.' : (e && e.message) || 'netværksfejl'); });
   if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -928,7 +928,7 @@ export default {
       try { ctx.waitUntil(cache.put(key, res.clone())); } catch (_) {}
       return res;
     }
-    return new Response('Nyhedsvagtens værktøjskasse: worker kører (version ' + VERSION + '). Data: /api/feed', { headers: { ...CORS, 'Content-Type': 'text/plain; charset=utf-8' } });
+    return new Response('Update by RH: worker kører (version ' + VERSION + '). Data: /api/feed', { headers: { ...CORS, 'Content-Type': 'text/plain; charset=utf-8' } });
   },
 };
 

@@ -11,7 +11,7 @@
  * Ret kilder og byer i CONFIG herunder. Intet andet skal ændres.
  */
 
-const VERSION = '32';
+const VERSION = '33';
 
 const CONFIG = {
   // ODIN RSS pr. beredskab. "areaDefault" = hændelser regnes som lokale, medmindre stationen ligger uden for området.
@@ -95,6 +95,13 @@ const CONFIG = {
   faerger: { url: 'https://aofaerger.slagelse.dk/da/sejlplan/aendringer-i-sejlplan/', daysAhead: 3 },
   // Politiets RSS har ingen brødtekst – den hentes fra selve meldingen for de nyeste (koster én forespørgsel pr. melding)
   politiBody: { maxItems: 6, maxHours: 48 },
+  // Døgnrapporter fra politi.dk (samme kilde som listen på politi.dk/doegnrapporter) – vises altid
+  doegn: {
+    api: 'https://politi.dk/api/news/getNewsResults',
+    listId: '90DEB0B1-8DF0-4A2D-823B-CFD7A5ADD85F', // politi.dk's liste "Døgnrapporter"
+    district: 'Sydsjaellands-og-Lolland-Falsters-Politi',
+    days: 7,
+  },
   // Politimeldinger vises altid – undtagen når de nævner et af disse steder (ordet må gerne fortsætte, fx Rødbyhavn, Guldborgsund)
   politiExclude: ['Nakskov', 'Gedser', 'Guldborg', 'Rødby', 'Nykøbing F', 'Nyk. F'],
   // Lokale medier (RSS). Tilføj/fjern frit. Status vises i appen, så du kan se om et feed virker.
@@ -817,6 +824,31 @@ async function politiBody(link, title) {
   return out.join('\n').trim();
 }
 
+/** Døgnrapporter: én melding pr. rapport med overskrift og link til politi.dk. Vises altid. */
+async function srcDoegn(ctx) {
+  const items = [], errors = [];
+  const c = CONFIG.doegn;
+  try {
+    const day = d => new Date(d).toISOString().slice(0, 10);
+    const qs = new URLSearchParams({
+      page: '0', pageSize: '10', fromDate: day(Date.now() - c.days * 864e5), toDate: day(Date.now() + 864e5),
+      newsType: 'Døgnrapporter', itemId: c.listId, language: 'da', districtQuery: c.district, isNewsList: 'true',
+    });
+    const data = JSON.parse(await fetchText(c.api + '?' + qs));
+    for (const n of (data.NewsList || [])) {
+      if (!n.Link) continue;
+      const title = String(n.Headline || 'Døgnrapport').replace(/^sydsjællands og lolland-falsters politi:\s*/i, '');
+      items.push({
+        id: 'doegn-' + hash(n.Link), source: 'politi', sourceLabel: 'Politi · Døgnrapport',
+        time: parseDate(n.ListDate) || parseDaDate(n.PublishDate || ''), title,
+        text: stripHtml(n.Manchet || ''), url: n.Link,
+        place: '', kommune: null, lat: null, lon: null, inArea: true, category: 'politi', doegn: true,
+      });
+    }
+  } catch (e) { errors.push('Døgnrapporter: ' + e.message); }
+  return { items, errors };
+}
+
 // ───────────────────────── handler ─────────────────────────
 
 const CORS = {
@@ -828,7 +860,10 @@ const CORS = {
 async function buildFeed(ctx) {
   const defs = [
     ['odin', 'ODIN 112-puls', () => srcOdin(ctx)],
-    ['politi', 'Politiet', () => srcRss(CONFIG.politi, 'politi', f => 'Politi · ' + f.label.replace(' Politi', ''), 'politi', ctx)],
+    ['politi', 'Politiet', async () => {
+      const [a, b] = await Promise.all([srcRss(CONFIG.politi, 'politi', f => 'Politi · ' + f.label.replace(' Politi', ''), 'politi', ctx), srcDoegn(ctx)]);
+      return { items: [...a.items, ...b.items], errors: [...a.errors, ...b.errors] };
+    }],
     ['vd', 'Vejdirektoratet', () => srcVd(ctx)],
     ['dsb', 'DSB', () => srcDsb(ctx)],
     ['lokaltog', 'Lokaltog', () => srcLokaltog(ctx)],
@@ -879,41 +914,6 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     if (request.method === 'OPTIONS') return new Response(null, { headers: CORS });
-    if (url.pathname === '/api/debug-pol') {
-      // Midlertidig testside (runde 2): læser listesidens datamodel og prøver /api/news/getNewsResults
-      const get = async (u, ms = 9000) => {
-        try {
-          const r = await fetch(u, { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)', 'Accept': 'application/json, text/plain, */*', 'Accept-Language': 'da-DK,da', 'Referer': 'https://politi.dk/doegnrapporter' }, signal: AbortSignal.timeout(ms) });
-          return { status: r.status, type: r.headers.get('content-type'), text: await r.text() };
-        } catch (e) { return { error: String(e && e.message || e) }; }
-      };
-      const out = { version: VERSION };
-      const list = await get('https://politi.dk/doegnrapporter?district=Sydsjaellands-og-Lolland-Falsters-Politi');
-      const lt = decodeEntities(list.text || '');
-      const around = k => { const i = lt.indexOf(k); return i >= 0 ? lt.slice(Math.max(0, i - 300), i + 1500) : null; };
-      out.model_hints = { ListId: around('ListId'), DistrictsList: around('DistrictsList'), NewsTypesList: around('NewsTypesList'), ngInit: (lt.match(/ng-init="[^"]{0,1500}/) || [null])[0] };
-      // forsøg at finde værdierne
-      const listId = (lt.match(/"ListId"\s*:\s*"?([^",}]+)/) || [])[1];
-      const lang = (lt.match(/"Language"\s*:\s*"([^"]+)"/) || [])[1] || 'da';
-      const dm = [...lt.matchAll(/\{\s*"Id"\s*:\s*"?([^",}]+)"?\s*,\s*"Name"\s*:\s*"([^"]+)"/g)].map(m => ({ id: m[1], name: m[2] }));
-      const sydsj = dm.find(d => /sydsjælland|sydsjaelland/i.test(d.name));
-      const types = [...new Set([...lt.matchAll(/"(?:Name|Title|TabTitle)"\s*:\s*"([^"]*[Dd]øgn[^"]*)"/g)].map(m => m[1]))];
-      out.found = { listId, lang, districts: dm.slice(0, 20), sydsj, types };
-      out.tries = [];
-      const base = 'https://politi.dk/api/news/getNewsResults';
-      const combos = [];
-      const from = new Date(Date.now() - 7 * 864e5).toISOString().slice(0, 10), to = new Date(Date.now() + 864e5).toISOString().slice(0, 10);
-      for (const nt of (types.length ? types : ['Døgnrapport', 'Døgnrapporter'])) {
-        combos.push({ page: 0, pageSize: 10, newsType: nt, itemId: listId || '', language: lang, districtQuery: sydsj ? sydsj.id : '', isNewsList: true });
-        combos.push({ page: 0, pageSize: 10, fromDate: from, toDate: to, newsType: nt, itemId: listId || '', language: lang, districtQuery: sydsj ? sydsj.id : '', isNewsList: true });
-      }
-      for (const c of combos.slice(0, 4)) {
-        const qs = new URLSearchParams(Object.entries(c).map(([k, v]) => [k, String(v)])).toString();
-        const r = await get(base + '?' + qs);
-        out.tries.push({ qs, status: r.status, type: r.type, error: r.error, start: (r.text || '').slice(0, 1500) });
-      }
-      return new Response(JSON.stringify(out, null, 1), { headers: { ...CORS, 'Content-Type': 'application/json; charset=utf-8' } });
-    }
     if (url.pathname === '/api/feed') {
       // Hele feedet caches i CONFIG.cacheSeconds, så mange samtidige brugere ikke henter alle kilder hver gang.
       const cache = caches.default;
@@ -933,4 +933,4 @@ export default {
 };
 
 // Eksporter til test i Node (ignoreres af Cloudflare)
-export const _test = { parseRss, parseDate, matchPlace, nearestPlace, stripHtml, srcOdin, srcVd, srcDsb, srcLokaltog, srcStorebaelt, srcEl, srcFaerger, srcDmi, srcDmiObs, srcDmiLightning, srcDmiSea, parseDaDate, srcRss, buildFeed, CONFIG };
+export const _test = { parseRss, parseDate, matchPlace, nearestPlace, stripHtml, srcOdin, srcVd, srcDsb, srcLokaltog, srcStorebaelt, srcEl, srcFaerger, srcDoegn, srcDmi, srcDmiObs, srcDmiLightning, srcDmiSea, parseDaDate, srcRss, buildFeed, CONFIG };

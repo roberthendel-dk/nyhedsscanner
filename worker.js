@@ -11,7 +11,7 @@
  * Ret kilder og byer i CONFIG herunder. Intet andet skal ændres.
  */
 
-const VERSION = '30';
+const VERSION = '31';
 
 const CONFIG = {
   // ODIN RSS pr. beredskab. "areaDefault" = hændelser regnes som lokale, medmindre stationen ligger uden for området.
@@ -879,6 +879,33 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     if (request.method === 'OPTIONS') return new Response(null, { headers: CORS });
+    if (url.pathname === '/api/debug-pol') {
+      // Midlertidig testside: finder datakilden bag politi.dk's døgnrapportliste
+      const get = async (u, ms = 8000) => {
+        try {
+          const r = await fetch(u, { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)', 'Accept': 'text/html,application/json,*/*', 'Accept-Language': 'da-DK,da' }, signal: AbortSignal.timeout(ms) });
+          return { status: r.status, type: r.headers.get('content-type'), text: await r.text() };
+        } catch (e) { return { error: String(e && e.message || e) }; }
+      };
+      const out = { version: VERSION };
+      const list = await get('https://politi.dk/doegnrapporter?district=Sydsjaellands-og-Lolland-Falsters-Politi');
+      const lt = list.text || '';
+      out.list = { status: list.status, error: list.error, length: lt.length,
+        scripts: [...lt.matchAll(/<script[^>]*src="([^"]+)"/gi)].map(m => new URL(m[1], 'https://politi.dk/').href).slice(0, 30),
+        data_attrs: [...new Set([...lt.matchAll(/data-[a-z\-]+="([^"]*(?:api|url|endpoint|service|news|doegn)[^"]*)"/gi)].map(m => m[0]))].slice(0, 30),
+        inline_api: [...new Set([...lt.matchAll(/["'`]((?:https?:\/\/[^"'`]*)?\/api\/[^"'`\s]{2,150})["'`]/gi)].map(m => m[1]))].slice(0, 30) };
+      const strs = new Set();
+      for (const s of out.list.scripts.filter(s => /politi\.dk/.test(s)).slice(0, 8)) {
+        const js = await get(s, 9000);
+        for (const m of (js.text || '').matchAll(/["'`]([^"'`\s]{3,160})["'`]/g)) if (/(\/api\/|getnews|newslist|doegnrapport|search|umbraco\/|sitecore|\/news\/)/i.test(m[1]) && !/\.(png|svg|jpe?g|css|woff)/i.test(m[1])) strs.add(m[1]);
+      }
+      out.script_strings = [...strs].slice(0, 80);
+      const dist = await get('https://politi.dk/sydsjaellands-og-lolland-falsters-politi/doegnrapporter');
+      const dt = dist.text || '';
+      out.district_page = { status: dist.status, error: dist.error, length: dt.length,
+        report_links: [...new Set([...dt.matchAll(/href="([^"]*\/doegnrapporter\/[^"]+\/\d{4}\/\d{2}\/\d{2})"/gi)].map(m => m[1]))].slice(0, 15) };
+      return new Response(JSON.stringify(out, null, 1), { headers: { ...CORS, 'Content-Type': 'application/json; charset=utf-8' } });
+    }
     if (url.pathname === '/api/feed') {
       // Hele feedet caches i CONFIG.cacheSeconds, så mange samtidige brugere ikke henter alle kilder hver gang.
       const cache = caches.default;

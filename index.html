@@ -232,6 +232,7 @@ function visible() {
 
 // Ekstra links ved visse kilder
 const MSBR_URL = 'https://msbr.dk/doegnrapport/';
+const P4_URL = 'https://www.dr.dk/trafik';
 function isMsbr(i) {
   if (i.source !== 'odin' || i.msbr) return false; // MSBR-rækker linker allerede til døgnrapporten
   return /Midt- og Sydsjællands/i.test(i.text || '') || ['Faxe', 'Næstved', 'Vordingborg'].includes(i.kommune) || /ringsted/i.test(i.place || '');
@@ -279,6 +280,7 @@ function render() {
           ${long ? '<button type="button" data-act="more">Vis mere</button>' : ''}
           <button type="button" data-act="copy">Kopiér notits</button>
           ${i.url ? `<a href="${escH(i.url)}" target="_blank" rel="noopener">Kilde</a>` : ''}
+          ${i.source === 'vd' ? `<a href="${P4_URL}" target="_blank" rel="noopener">P4 Trafik</a>` : ''}
           ${isMsbr(i) ? `<a href="${MSBR_URL}" target="_blank" rel="noopener">MSBR døgnrapport</a>` : ''}
           ${isSlagelseBR(i) ? `<a href="${SBR_URL}" target="_blank" rel="noopener">Slagelse B&amp;R på Beredskabsinfo</a>` : ''}
           ${isSoroBR(i) ? `<a href="${SBR_SORO_URL}" target="_blank" rel="noopener">Slagelse B&amp;R (Sorø) på Beredskabsinfo</a>` : ''}

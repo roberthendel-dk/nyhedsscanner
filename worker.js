@@ -11,7 +11,7 @@
  * Ret kilder og byer i CONFIG herunder. Intet andet skal ændres.
  */
 
-const VERSION = '35';
+const VERSION = '36';
 
 const CONFIG = {
   // ODIN RSS pr. beredskab. "areaDefault" = hændelser regnes som lokale, medmindre stationen ligger uden for området.
@@ -454,6 +454,45 @@ function dupKey(i) {
   if (i.source === 'vd') return 'vd|' + t + '|' + (i.lat != null ? (+i.lat).toFixed(2) + ',' + (+i.lon).toFixed(2) : String(i.text || '').slice(0, 80));
   return i.source + '|' + t;
 }
+/** Vejdirektoratet melder ofte samme hændelse én gang pr. kørselsretning (fx "fra Ringsted mod Halsskov"
+ *  og "fra Halsskov mod Ringsted"). Meldinger med samme titel, tæt på hinanden og næsten samtidig slås sammen. */
+const VD_MERGE = { km: 3, minutes: 30 };
+function mergeVdDirections(items) {
+  const out = [], vd = [];
+  for (const i of items) (i.source === 'vd' && i.lat != null && i.lon != null ? vd : out).push(i);
+  vd.sort((a, b) => (a.time || '').localeCompare(b.time || '')); // ældste først – den beholder sit id
+  const used = new Set();
+  for (let x = 0; x < vd.length; x++) {
+    if (used.has(x)) continue;
+    const a = { ...vd[x] };
+    const ta = String(a.title || '').toLowerCase().trim();
+    const firstLine = i => String(i.text || '').split('\n')[0];
+    const lines = [firstLine(a)];
+    for (let y = x + 1; y < vd.length; y++) {
+      if (used.has(y)) continue;
+      const b = vd[y];
+      if (String(b.title || '').toLowerCase().trim() !== ta) continue;
+      if (km(+a.lat, +a.lon, +b.lat, +b.lon) > VD_MERGE.km) continue;
+      if (a.time && b.time && Math.abs(Date.parse(a.time) - Date.parse(b.time)) > VD_MERGE.minutes * 6e4) continue;
+      used.add(y);
+      lines.push(firstLine(b));
+      if (b.until && (!a.until || b.until > a.until)) a.until = b.until;
+    }
+    if (lines.length > 1) {
+      // "fra A mod B" + "fra B mod A" → begge retninger
+      const dir = l => (l.match(/fra (.+?) mod (.+?)(?: mellem|$)/i) || []).slice(1).map(t => t.trim().toLowerCase());
+      const [d1, d2] = [dir(lines[0]), dir(lines[1])];
+      const both = d1.length && d2.length && d1[0] === d2[1] && d1[1] === d2[0];
+      a.title = a.title + (both ? ' – begge retninger' : ' – ' + lines.length + ' meldinger');
+      a.text = 'Meldt i ' + (both ? 'begge retninger' : lines.length + ' meldinger') + ':\n' + lines.map(l => '· ' + l).join('\n')
+        + '\n' + String(a.text || '').split('\n').slice(1).join('\n');
+      a.text = a.text.trim();
+    }
+    out.push(a);
+  }
+  return out;
+}
+
 function better(a, b) { // er a bedre end b?
   return (a.time || '') > (b.time || '') || ((a.time || '') === (b.time || '') && (a.text || '').length > (b.text || '').length);
 }
@@ -953,10 +992,11 @@ async function buildFeed(ctx) {
     // samme hændelse flere gange: behold den nyeste / mest udførlige version
     if (!prev || better(i, prev)) byId.set(k, i);
   }
-  const items = [...byId.values()]
+  const items = mergeVdDirections([...byId.values()])
     .sort((a, b) => (b.time || '').localeCompare(a.time || ''))
     .slice(0, 400);
-  for (const r of results) { r.items = r.items.filter(i => byId.get(dupKey(i)) === i); }
+  const shown = new Set(items.map(i => i.id));
+  for (const r of results) { r.items = r.items.filter(i => shown.has(i.id)); }
   return {
     updated: new Date().toISOString(),
     version: VERSION,
@@ -992,4 +1032,4 @@ export default {
 };
 
 // Eksporter til test i Node (ignoreres af Cloudflare)
-export const _test = { parseRss, parseDate, matchPlace, nearestPlace, stripHtml, srcOdin, srcVd, srcDsb, srcLokaltog, srcStorebaelt, srcEl, srcFaerger, srcDoegn, srcDmi, srcDmiRegion, srcDmiObs, srcDmiLightning, srcDmiSea, parseDaDate, srcRss, buildFeed, CONFIG };
+export const _test = { parseRss, parseDate, matchPlace, nearestPlace, stripHtml, srcOdin, srcVd, srcDsb, srcLokaltog, srcStorebaelt, srcEl, srcFaerger, srcDoegn, srcDmi, srcDmiRegion, srcDmiObs, srcDmiLightning, srcDmiSea, parseDaDate, srcRss, buildFeed, mergeVdDirections, CONFIG };

@@ -59,6 +59,7 @@ label.tg input{width:18px;height:18px;accent-color:var(--red)}
 .time small{display:block;font:400 12px "Libre Franklin",sans-serif;color:var(--mut);margin-top:3px}
 .meta{font-size:13px;color:var(--mut);display:flex;gap:4px 10px;flex-wrap:wrap;align-items:center}
 .src{font-weight:800;color:var(--ink)}
+.afsl{font-weight:800;color:var(--ink)}
 .src.odin{color:var(--red)}
 .ico{font-size:1.15em;margin-right:5px;text-decoration:none;display:inline-block}
 .tagk{border:1px solid var(--rule);padding:0 6px;border-radius:2px;white-space:nowrap}
@@ -185,6 +186,7 @@ function ago(iso) {
 /** Samme hændelse fra flere feeds/opdateringer → samme nøgle. */
 function dupKey(i) {
   const t = String(i.title || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  if (i.source === 'el') return 'el|' + i.id; // hver afbrydelse for sig (titler kan gå igen)
   if (i.source === 'odin') return 'odin|' + t + '|' + String(i.time || '').slice(0, 16);
   if (i.source === 'vd') return 'vd|' + t + '|' + (i.lat != null ? (+i.lat).toFixed(2) + ',' + (+i.lon).toFixed(2) : String(i.text || '').slice(0, 80));
   return i.source + '|' + t;
@@ -271,7 +273,7 @@ function render() {
           ${i.place && i.place !== i.kommune ? `<span>${escH(i.place)}</span>` : ''}
           ${i.inArea ? '' : '<span>uden for området</span>'}
         </div>
-        <h3>${escH(i.title)}</h3>
+        <h3>${i.ended ? `<b class="afsl">Afsluttet${i.endedAt ? ' kl. ' + fmtTime(i.endedAt) : ''}:</b> ` : ''}${escH(i.title)}</h3>
         ${i.text ? `<p class="${long ? 'clamp' : ''}">${escH(i.text)}</p>` : ''}
         <div class="acts">
           ${long ? '<button type="button" data-act="more">Vis mere</button>' : ''}
@@ -362,7 +364,7 @@ $('list').addEventListener('click', async e => {
   if (b.dataset.act === 'more') { art.querySelector('p').classList.toggle('clamp'); b.textContent = b.textContent === 'Vis mere' ? 'Vis mindre' : 'Vis mere'; }
   if (b.dataset.act === 'copy' && it) {
     const d = it.time ? new Date(it.time).toLocaleString('da-DK', { dateStyle: 'short', timeStyle: 'short', timeZone: 'Europe/Copenhagen' }) : '';
-    const txt = `${d} · ${it.sourceLabel}${it.kommune ? ' · ' + it.kommune : ''}${it.place && it.place !== it.kommune ? ' (' + it.place + ')' : ''}\n${it.title}${it.text ? '\n' + it.text : ''}${it.url ? '\nKilde: ' + it.url : ''}`;
+    const txt = `${d} · ${it.sourceLabel}${it.kommune ? ' · ' + it.kommune : ''}${it.place && it.place !== it.kommune ? ' (' + it.place + ')' : ''}\n${it.ended ? 'AFSLUTTET: ' : ''}${it.title}${it.text ? '\n' + it.text : ''}${it.url ? '\nKilde: ' + it.url : ''}`;
     try { await navigator.clipboard.writeText(txt); b.textContent = 'Kopieret ✓'; } catch (_) { b.textContent = 'Kunne ikke kopiere'; }
     setTimeout(() => { b.textContent = 'Kopiér notits'; }, 1800);
   }

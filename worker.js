@@ -11,7 +11,7 @@
  * Ret kilder og byer i CONFIG herunder. Intet andet skal ændres.
  */
 
-const VERSION = '34';
+const VERSION = '35';
 
 const CONFIG = {
   // ODIN RSS pr. beredskab. "areaDefault" = hændelser regnes som lokale, medmindre stationen ligger uden for området.
@@ -82,9 +82,11 @@ const CONFIG = {
   },
   // Strømafbrydelser fra elnetselskabernes fælles platform (Green Power Denmark) – Cerius m.fl.
   el: {
-    url: 'https://api.elnet.greenpowerdenmark.dk/api/incidents?showType=2&supplierId=0',
+    // showType=1 giver både aktive og afsluttede afbrydelser (afsluttede har et sluttidspunkt)
+    url: 'https://api.elnet.greenpowerdenmark.dk/api/incidents?showType=1&supplierId=0',
     maxKm: 10,
     hoursAhead: 24, // varslede afbrydelser vises, når de starter inden for så mange timer
+    keepEndedDays: 7, // afsluttede afbrydelser bliver stående så længe (markeret "Afsluttet")
     // Postnumre i de fem kommuner (bruges hvis koordinater mangler)
     zip: {
       Slagelse: ['4200','4220','4230','4241','4242','4243','4261','4291'],
@@ -447,6 +449,7 @@ async function srcVd(ctx) {
 /** Samme hændelse fra flere feeds/opdateringer → samme nøgle. */
 function dupKey(i) {
   const t = String(i.title || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  if (i.source === 'el') return 'el|' + i.id; // hver afbrydelse for sig (titler kan gå igen)
   if (i.source === 'odin') return 'odin|' + t + '|' + String(i.time || '').slice(0, 16);
   if (i.source === 'vd') return 'vd|' + t + '|' + (i.lat != null ? (+i.lat).toFixed(2) + ',' + (+i.lon).toFixed(2) : String(i.text || '').slice(0, 80));
   return i.source + '|' + t;
@@ -747,7 +750,9 @@ async function srcStorebaelt(ctx) {
   return { items, errors };
 }
 
-/** Strømafbrydelser: aktive og snarligt varslede afbrydelser i området. */
+/** Strømafbrydelser: aktive, snarligt varslede og nyligt afsluttede afbrydelser i området.
+ *  Elnetselskaberne deler ofte én afbrydelse op i mange delområder med samme start- og sluttid
+ *  (fx "Afbrud Slagelse" og "Afbrud Gørlev"). De samles til ét kort. */
 async function srcEl(ctx) {
   const items = [], errors = [];
   const cfg = CONFIG.el;
@@ -757,13 +762,14 @@ async function srcEl(ctx) {
   try {
     const data = JSON.parse(await fetchText(cfg.url, ctx));
     const now = Date.now();
+    const groups = new Map(); // leverandør + start + slut → samlet afbrydelse
     for (const r of (Array.isArray(data) ? data : (data.value || data.items || []))) {
-      if (r.incidentStatusId != null && r.incidentStatusId !== 1) continue; // kun aktive
+      if (r.incidentStatusId != null && r.incidentStatusId !== 1) continue;
       const start = local(r.startDate), end = local(r.endDate), expected = local(r.expectedDowntime);
-      if (start && Date.parse(start) > now + cfg.hoursAhead * 36e5) continue;
-      if (end && Date.parse(end) < now) continue;
+      if (start && Date.parse(start) > now + cfg.hoursAhead * 36e5) continue;           // for langt ude i fremtiden
+      if (end && Date.parse(end) < now - cfg.keepEndedDays * 864e5) continue;           // afsluttet for længe siden
       let place = '', kommune = null, inArea = false;
-      if (r.centerLat && r.centerLng) {
+      if (+r.centerLat && +r.centerLng) {
         const n = nearestPlace(+r.centerLat, +r.centerLng);
         if (n && n.d <= cfg.maxKm) { place = n.p[0]; kommune = n.p[1]; inArea = !!n.p[1]; }
       }
@@ -773,21 +779,46 @@ async function srcEl(ctx) {
         if (k) { inArea = true; kommune = k; place = place || 'postnr. ' + zips.join(', '); }
       }
       if (!inArea) { const pm = matchPlace(r.title || ''); if (pm && pm.inArea) { inArea = true; place = pm.place; kommune = pm.kommune; } }
-      if (!inArea) continue; // resten af landet springes over
-      const n = +r.effectedCustomers || 0;
-      const title = (r.title || 'Strømafbrydelse').trim() + (n ? ` – ${n.toLocaleString('da-DK')} kunder` : '');
+      // Delområder af samme afbrydelse har samme selskab og starttid, men kan slutte på forskellige tidspunkter
+      const key = [r.supplierId || r.supplierName, r.startDate].join('|');
+      const g = groups.get(key) || { key, rows: [], local: [], start, end: null, open: false, expected: null };
+      g.rows.push(r);
+      if (inArea) g.local.push({ place, kommune });
+      // Status afgøres af delområderne i jeres område (et delområde langt væk må ikke holde kortet "aktivt")
+      if (inArea) {
+        if (!end || Date.parse(end) > now) g.open = true;                                // mindst ét lokalt delområde er stadig ramt
+        if (end && (!g.end || end > g.end)) g.end = end;                                 // seneste lokale sluttid
+      }
+      if (expected && (!g.expected || expected > g.expected)) g.expected = expected;
+      groups.set(key, g);
+    }
+    for (const g of groups.values()) {
+      if (!g.local.length) continue; // resten af landet springes over
+      g.ended = !g.open;
+      const r0 = g.rows[0];
+      const names = [...new Set(g.rows.map(r => String(r.title || '').replace(/^afbrud\s+(i\s+)?/i, '').trim()).filter(Boolean))];
+      const zips = [...new Set(g.rows.flatMap(r => String(r.zipcodes || '').split(/[,; ]+/).filter(Boolean)))];
+      const n = g.rows.reduce((s, r) => s + (+r.effectedCustomers || 0), 0);
+      const title = (names.length ? 'Strømafbrydelse: ' + names.slice(0, 4).join(', ') + (names.length > 4 ? ' m.fl.' : '') : 'Strømafbrydelse')
+        + (n ? ` – ${n.toLocaleString('da-DK')} kunder` : '');
       const text = [
-        [r.incidentType, r.supplierName].filter(Boolean).join(' · '),
-        start && 'Start: ' + fmt(start), (end || expected) && (end ? 'Slut: ' : 'Forventet slut: ') + fmt(end || expected),
+        [r0.incidentType, r0.supplierName].filter(Boolean).join(' · '),
+        g.start && 'Start: ' + fmt(g.start),
+        g.ended ? 'Slut: ' + fmt(g.end) : g.expected && 'Forventet slut: ' + fmt(g.expected),
         zips.length && 'Postnr.: ' + zips.join(', '),
-        r.cause && stripHtml(r.cause), r.comment && stripHtml(r.comment),
+        r0.cause && stripHtml(r0.cause), r0.comment && stripHtml(r0.comment),
       ].filter(Boolean).join('\n');
-      const web = r.supplierWeb ? (/^https?:/.test(r.supplierWeb) ? r.supplierWeb : 'https://' + r.supplierWeb.replace(/^\/+/, '')) : '';
+      const web = r0.supplierWeb ? (/^https?:/.test(r0.supplierWeb) ? r0.supplierWeb : 'https://' + r0.supplierWeb.replace(/^\/+/, '')) : '';
+      const first = g.local[0];
       items.push({
-        id: 'el-' + (r.id || hash(title + start)), source: 'el', sourceLabel: 'Strømafbrydelse',
-        time: start || local(r.created), until: end || null, title, text: text.slice(0, 1200),
-        url: /cerius/i.test(r.supplierName || '') ? 'https://cerius.dk/stroemafbrydelse/' : (web || 'https://elnet.dk/'),
-        place, kommune, lat: +r.centerLat || null, lon: +r.centerLng || null, inArea, category: 'forsyning',
+        id: 'el-' + hash(g.key),
+        source: 'el', sourceLabel: 'Strømafbrydelse',
+        time: g.start || local(r0.created),
+        until: null, // afsluttede skal ikke sorteres fra som udløbne – de markeres i stedet
+        ended: g.ended, endedAt: g.ended ? g.end : null,
+        title, text: text.slice(0, 1200),
+        url: /cerius/i.test(r0.supplierName || '') ? 'https://cerius.dk/stroemafbrydelse/' : (web || 'https://elnet.dk/'),
+        place: first.place, kommune: first.kommune, lat: +r0.centerLat || null, lon: +r0.centerLng || null, inArea: true, category: 'forsyning',
       });
     }
   } catch (e) { errors.push(e.message); }

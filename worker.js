@@ -1,6 +1,6 @@
 /**
  * Update by RH · Cloudflare Worker
- * Henter ODIN 112-puls, politiets meldinger (Ritzau), Vejdirektoratet, DSB, Lokaltog (Østbanen), DMI-varsler
+ * Henter ODIN 112-puls, politiets meldinger (Ritzau), Vejdirektoratet, DSB, Lokaltog (Østbanen), DMI-varsler og -regionaludsigt
  * og lokale medier, filtrerer til Faxe, Sorø, Næstved, Vordingborg og Slagelse
  * og returnerer én samlet JSON-liste med CORS, så webappen kan læse den fra alle enheder.
  *
@@ -11,7 +11,7 @@
  * Ret kilder og byer i CONFIG herunder. Intet andet skal ændres.
  */
 
-const VERSION = '33';
+const VERSION = '34';
 
 const CONFIG = {
   // ODIN RSS pr. beredskab. "areaDefault" = hændelser regnes som lokale, medmindre stationen ligger uden for området.
@@ -47,6 +47,9 @@ const CONFIG = {
     // Varselsområder der dækker jeres kommuner
     areaRx: /(vestsjælland|sydsjælland|midtsjælland|sjælland(?!s odde)|zealand|møn|storebælt|great belt|smålandsfarvandet|faxe|næstved|slagelse|sorø|vordingborg|hele landet|danmark|denmark)/i,
   },
+  // DMI's regionaludsigt (tekst) – samme kilde som dmi.dk/danmark/regionaludsigter-dk.
+  // 2614764 = "Vest-, Sydsjælland og Lolland Falster", som dækker alle fem kommuner.
+  dmiRegion: { url: 'https://www.dmi.dk/dmidk_byvejrWS/rest/texts.json/', id: '2614764' },
   // DMI's målinger (metObs): kun usædvanlige værdier i området de seneste timer
   dmiObs: {
     url: 'https://opendataapi.dmi.dk/v2/metObs/collections/observation/items',
@@ -591,6 +594,31 @@ async function srcDmi(ctx) {
   return { items, errors };
 }
 
+/** DMI regionaludsigt: den seneste tekstudsigt for regionen. Én melding pr. udsendelse. */
+async function srcDmiRegion(ctx) {
+  const items = [], errors = [];
+  const cfg = CONFIG.dmiRegion;
+  try {
+    const data = JSON.parse(await fetchText(cfg.url + cfg.id, ctx));
+    const t = (data.regionalForecast || {}).text || {};
+    const body = String(t.weatherForecast || '').replace(/\s+/g, ' ').trim();
+    if (!body) throw new Error('Svaret indeholdt ingen udsigtstekst – DMI har måske ændret opbygning');
+    const valid = String(t.valid || '').trim();             // "Udsigt, der gælder til fredag aften, udsendt kl. 16.25"
+    const issued = (valid.match(/udsendt\s+kl\.?\s*(\d{1,2}[.:]\d{2})/i) || [])[1] || '';
+    const time = parseDaDate([t.date || '', issued].join(' ').trim()); // "Torsdag den 26. november 2026 16.25"
+    const headline = String(t.headline || '').trim().replace(/\s+/g, ' ');
+    items.push({
+      id: 'dmiregion-' + hash(cfg.id + (t.date || '') + issued),
+      source: 'dmi', sourceLabel: 'DMI · Regionaludsigt',
+      time, title: 'Regionaludsigt: ' + (headline || 'vejret de næste døgn'),
+      text: [t.area && 'Område: ' + t.area, valid, body].filter(Boolean).join('\n'),
+      url: 'https://www.dmi.dk/danmark/regionaludsigter-dk',
+      place: t.area || '', kommune: null, lat: null, lon: null, inArea: true, category: 'vejr',
+    });
+  } catch (e) { errors.push('Regionaludsigt: ' + e.message); }
+  return { items, errors };
+}
+
 /** DMI-målinger: henter observationer og melder kun dem, der passerer en tærskel. */
 async function srcDmiObs(ctx) {
   const items = [], errors = [];
@@ -871,7 +899,7 @@ async function buildFeed(ctx) {
     ['faerger', 'Færger', () => srcFaerger(ctx)],
     ['el', 'Strøm', () => srcEl(ctx)],
     ['dmi', 'DMI', async () => {
-      const parts = await Promise.all([srcDmi(ctx), srcDmiObs(ctx), srcDmiLightning(ctx), srcDmiSea(ctx)]);
+      const parts = await Promise.all([srcDmi(ctx), srcDmiRegion(ctx), srcDmiObs(ctx), srcDmiLightning(ctx), srcDmiSea(ctx)]);
       return { items: parts.flatMap(p => p.items), errors: parts.flatMap(p => p.errors) };
     }],
     ['medier', 'Lokale medier', () => srcRss(CONFIG.media, 'medier', f => f.label, 'medier', ctx)],
@@ -933,4 +961,4 @@ export default {
 };
 
 // Eksporter til test i Node (ignoreres af Cloudflare)
-export const _test = { parseRss, parseDate, matchPlace, nearestPlace, stripHtml, srcOdin, srcVd, srcDsb, srcLokaltog, srcStorebaelt, srcEl, srcFaerger, srcDoegn, srcDmi, srcDmiObs, srcDmiLightning, srcDmiSea, parseDaDate, srcRss, buildFeed, CONFIG };
+export const _test = { parseRss, parseDate, matchPlace, nearestPlace, stripHtml, srcOdin, srcVd, srcDsb, srcLokaltog, srcStorebaelt, srcEl, srcFaerger, srcDoegn, srcDmi, srcDmiRegion, srcDmiObs, srcDmiLightning, srcDmiSea, parseDaDate, srcRss, buildFeed, CONFIG };

@@ -11,7 +11,7 @@
  * Ret kilder og byer i CONFIG herunder. Intet andet skal ændres.
  */
 
-const VERSION = '36';
+const VERSION = '37';
 
 const CONFIG = {
   // ODIN RSS pr. beredskab. "areaDefault" = hændelser regnes som lokale, medmindre stationen ligger uden for området.
@@ -106,6 +106,10 @@ const CONFIG = {
     listId: '90DEB0B1-8DF0-4A2D-823B-CFD7A5ADD85F', // politi.dk's liste "Døgnrapporter"
     district: 'Sydsjaellands-og-Lolland-Falsters-Politi',
     days: 7,
+    // politi.dk er ofte langsom. Sidst hentede rapporter gemmes i Cloudflares cache og bruges med det samme;
+    // er de ældre end freshMinutes, hentes nye i baggrunden (med god tid), mens feedet bruger de gemte.
+    freshMinutes: 15,
+    backgroundTimeoutMs: 25000,
   },
   // Politimeldinger vises altid – undtagen når de nævner et af disse steder (ordet må gerne fortsætte, fx Rødbyhavn, Guldborgsund)
   politiExclude: ['Nakskov', 'Gedser', 'Guldborg', 'Rødby', 'Nykøbing F', 'Nyk. F'],
@@ -291,11 +295,11 @@ function hash(s) {
 
 /** Henter en kilde. Bruger ikke Cloudflares cache-API pr. kilde, da hvert opslag tæller med i
  *  gratisplanens grænse på 50 udgående forespørgsler pr. kørsel. I stedet caches hele feedet (se handler). */
-async function fetchText(url, ctx) {
+async function fetchText(url, ctx, timeoutMs = CONFIG.timeoutMs) {
   const res = await fetch(url, {
     headers: { 'User-Agent': 'Mozilla/5.0 (Update by RH; redaktionelt overblik)', 'Accept': '*/*' },
-    signal: AbortSignal.timeout(CONFIG.timeoutMs),
-  }).catch(e => { throw new Error(e && e.name === 'TimeoutError' ? 'svarede ikke inden ' + CONFIG.timeoutMs / 1000 + ' sek.' : (e && e.message) || 'netværksfejl'); });
+    signal: AbortSignal.timeout(timeoutMs),
+  }).catch(e => { throw new Error(e && e.name === 'TimeoutError' ? 'svarede ikke inden ' + timeoutMs / 1000 + ' sek.' : (e && e.message) || 'netværksfejl'); });
   if (!res.ok) throw new Error('HTTP ' + res.status);
   return res.text();
 }
@@ -923,28 +927,65 @@ async function politiBody(link, title) {
 }
 
 /** Døgnrapporter: én melding pr. rapport med overskrift og link til politi.dk. Vises altid. */
-async function srcDoegn(ctx) {
-  const items = [], errors = [];
+async function fetchDoegn(timeoutMs) {
   const c = CONFIG.doegn;
-  try {
-    const day = d => new Date(d).toISOString().slice(0, 10);
-    const qs = new URLSearchParams({
-      page: '0', pageSize: '10', fromDate: day(Date.now() - c.days * 864e5), toDate: day(Date.now() + 864e5),
-      newsType: 'Døgnrapporter', itemId: c.listId, language: 'da', districtQuery: c.district, isNewsList: 'true',
+  const day = d => new Date(d).toISOString().slice(0, 10);
+  const qs = new URLSearchParams({
+    page: '0', pageSize: '10', fromDate: day(Date.now() - c.days * 864e5), toDate: day(Date.now() + 864e5),
+    newsType: 'Døgnrapporter', itemId: c.listId, language: 'da', districtQuery: c.district, isNewsList: 'true',
+  });
+  const data = JSON.parse(await fetchText(c.api + '?' + qs, null, timeoutMs));
+  const items = [];
+  for (const n of (data.NewsList || [])) {
+    if (!n.Link) continue;
+    const title = String(n.Headline || 'Døgnrapport').replace(/^sydsjællands og lolland-falsters politi:\s*/i, '');
+    items.push({
+      id: 'doegn-' + hash(n.Link), source: 'politi', sourceLabel: 'Politi · Døgnrapport',
+      time: parseDate(n.ListDate) || parseDaDate(n.PublishDate || ''), title,
+      text: stripHtml(n.Manchet || ''), url: n.Link,
+      place: '', kommune: null, lat: null, lon: null, inArea: true, category: 'politi', doegn: true,
     });
-    const data = JSON.parse(await fetchText(c.api + '?' + qs));
-    for (const n of (data.NewsList || [])) {
-      if (!n.Link) continue;
-      const title = String(n.Headline || 'Døgnrapport').replace(/^sydsjællands og lolland-falsters politi:\s*/i, '');
-      items.push({
-        id: 'doegn-' + hash(n.Link), source: 'politi', sourceLabel: 'Politi · Døgnrapport',
-        time: parseDate(n.ListDate) || parseDaDate(n.PublishDate || ''), title,
-        text: stripHtml(n.Manchet || ''), url: n.Link,
-        place: '', kommune: null, lat: null, lon: null, inArea: true, category: 'politi', doegn: true,
-      });
+  }
+  return items;
+}
+
+const DOEGN_CACHE_KEY = 'https://cache.update-by-rh.invalid/doegnrapporter';
+async function doegnCacheGet() {
+  try {
+    const hit = await caches.default.match(DOEGN_CACHE_KEY);
+    return hit ? await hit.json() : null; // { at, items }
+  } catch (_) { return null; }
+}
+async function doegnCachePut(items) {
+  try {
+    await caches.default.put(DOEGN_CACHE_KEY, new Response(JSON.stringify({ at: Date.now(), items }), {
+      headers: { 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=' + 8 * 86400 },
+    }));
+  } catch (_) { /* cache er ikke afgørende */ }
+}
+
+async function srcDoegn(ctx) {
+  const c = CONFIG.doegn;
+  const cached = await doegnCacheGet();
+  if (cached && Array.isArray(cached.items) && cached.items.length) {
+    // Brug de gemte rapporter med det samme; hent nye i baggrunden, hvis de er ved at være gamle
+    if (Date.now() - cached.at > c.freshMinutes * 6e4 && ctx && ctx.waitUntil) {
+      ctx.waitUntil(fetchDoegn(c.backgroundTimeoutMs).then(items => items.length && doegnCachePut(items)).catch(() => {}));
     }
-  } catch (e) { errors.push('Døgnrapporter: ' + e.message); }
-  return { items, errors };
+    return { items: cached.items, errors: [] };
+  }
+  // Intet gemt endnu: hent direkte (og gem, hvis det lykkes)
+  try {
+    const items = await fetchDoegn(CONFIG.timeoutMs);
+    if (items.length) {
+      if (ctx && ctx.waitUntil) ctx.waitUntil(doegnCachePut(items)); else await doegnCachePut(items);
+    }
+    return { items, errors: [] };
+  } catch (e) {
+    // Langsom politi.dk: prøv igen i baggrunden med mere tid, så rapporterne er klar ved næste opdatering
+    if (ctx && ctx.waitUntil) ctx.waitUntil(fetchDoegn(c.backgroundTimeoutMs).then(items => items.length && doegnCachePut(items)).catch(() => {}));
+    return { items: [], errors: ['Døgnrapporter: ' + e.message + ' (prøver igen i baggrunden)'] };
+  }
 }
 
 // ───────────────────────── handler ─────────────────────────
@@ -1032,4 +1073,4 @@ export default {
 };
 
 // Eksporter til test i Node (ignoreres af Cloudflare)
-export const _test = { parseRss, parseDate, matchPlace, nearestPlace, stripHtml, srcOdin, srcVd, srcDsb, srcLokaltog, srcStorebaelt, srcEl, srcFaerger, srcDoegn, srcDmi, srcDmiRegion, srcDmiObs, srcDmiLightning, srcDmiSea, parseDaDate, srcRss, buildFeed, mergeVdDirections, CONFIG };
+export const _test = { parseRss, parseDate, matchPlace, nearestPlace, stripHtml, srcOdin, srcVd, srcDsb, srcLokaltog, srcStorebaelt, srcEl, srcFaerger, srcDoegn, fetchDoegn, srcDmi, srcDmiRegion, srcDmiObs, srcDmiLightning, srcDmiSea, parseDaDate, srcRss, buildFeed, mergeVdDirections, CONFIG };

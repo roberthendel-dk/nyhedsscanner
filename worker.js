@@ -11,7 +11,7 @@
  * Ret kilder og byer i CONFIG herunder. Intet andet skal ændres.
  */
 
-const VERSION = '37';
+const VERSION = '38';
 
 const CONFIG = {
   // ODIN RSS pr. beredskab. "areaDefault" = hændelser regnes som lokale, medmindre stationen ligger uden for området.
@@ -108,7 +108,7 @@ const CONFIG = {
     days: 7,
     // politi.dk er ofte langsom. Sidst hentede rapporter gemmes i Cloudflares cache og bruges med det samme;
     // er de ældre end freshMinutes, hentes nye i baggrunden (med god tid), mens feedet bruger de gemte.
-    freshMinutes: 15,
+    freshMinutes: 3,
     backgroundTimeoutMs: 25000,
   },
   // Politimeldinger vises altid – undtagen når de nævner et af disse steder (ordet må gerne fortsætte, fx Rødbyhavn, Guldborgsund)
@@ -938,7 +938,7 @@ async function fetchDoegn(timeoutMs) {
   const items = [];
   for (const n of (data.NewsList || [])) {
     if (!n.Link) continue;
-    const title = String(n.Headline || 'Døgnrapport').replace(/^sydsjællands og lolland-falsters politi:\s*/i, '');
+    const title = String(n.Headline || 'Døgnrapport').replace(/^sydsjællands og lolland-\s*falsters politi:\s*/i, '');
     items.push({
       id: 'doegn-' + hash(n.Link), source: 'politi', sourceLabel: 'Politi · Døgnrapport',
       time: parseDate(n.ListDate) || parseDaDate(n.PublishDate || ''), title,
